@@ -1,6 +1,6 @@
 #include "base_control.h"
-#include "EchoEar.h"
-#include "echo_base_control.h"
+#include "esp_vocat.h"
+#include "vocat_base_control.h"
 #include "display/display.h"
 #include "display/emote_display.h"
 #include "config.h"
@@ -14,7 +14,7 @@
 
 BaseControl::BaseControl(EspS3Cat* board) : board_(board)
 {
-    echo_base_online_ = false;
+    vocat_base_online_ = false;
     last_heartbeat_time_ = 0;
     heartbeat_check_timer_ = nullptr;
     calibrate_semaphore_ = xSemaphoreCreateBinary();
@@ -36,7 +36,7 @@ BaseControl::~BaseControl()
 
 void BaseControl::Initialize()
 {
-    echo_base_control_config_t base_config = {
+    vocat_base_control_config_t base_config = {
         .uart_num = UART_NUM_1,
         .tx_pin = UART1_TX,
         .rx_pin = UART1_RX,
@@ -45,7 +45,7 @@ void BaseControl::Initialize()
         .cmd_cb = CmdCallback,
         .user_ctx = this,
     };
-    esp_err_t ret = echo_base_control_init(&base_config);
+    esp_err_t ret = vocat_base_control_init(&base_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize echo base control");
         return;
@@ -73,7 +73,7 @@ void BaseControl::Initialize()
     }
 
     // Initialize to offline state
-    echo_base_online_ = false;
+    vocat_base_online_ = false;
     last_heartbeat_time_ = 0;
 }
 
@@ -86,7 +86,7 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
 
     emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
 
-    // if (cmd != ECHO_BASE_CMD_RECV_HEARTBEAT) {
+    // if (cmd != VOCAT_BASE_CMD_RECV_HEARTBEAT) {
         printf("Handle: cmd=%02X, ", cmd);
         for (int i = 0; i < data_len; i++) {
             printf("%02X ", data[i]);
@@ -95,43 +95,43 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
     // }
 
     switch (cmd) {
-    case ECHO_BASE_CMD_RECV_SLIDE_SWITCH: {
+    case VOCAT_BASE_CMD_RECV_SLIDE_SWITCH: {
         if (data_len >= 2) {
             auto &app = Application::GetInstance();
 
             uint16_t event = (data[0] << 8) | data[1];
             switch (event) {
-            case ECHO_BASE_CMD_RECV_SWITCH_SLIDE_DOWN:
+            case VOCAT_BASE_CMD_RECV_SWITCH_SLIDE_DOWN:
                 ESP_LOGI(TAG, "Slide switch down");
                 app.ToggleChatState();
                 break;
-            case ECHO_BASE_CMD_RECV_SWITCH_SLIDE_UP:
+            case VOCAT_BASE_CMD_RECV_SWITCH_SLIDE_UP:
                 ESP_LOGI(TAG, "Slide switch up");
                 app.ToggleChatState();
                 break;
-            case ECHO_BASE_CMD_RECV_CALIBRATE_START:
+            case VOCAT_BASE_CMD_RECV_CALIBRATE_START:
                 ESP_LOGI(TAG, "Calibrate start");
                 display->SetChatMessage("system", Lang::Strings::CALIBRATING_STEP1);
                 break;
-            case ECHO_BASE_CMD_RECV_CALIBRATE_STEP1:
+            case VOCAT_BASE_CMD_RECV_CALIBRATE_STEP1:
                 ESP_LOGI(TAG, "Calibrate step 1 Done");
                 display->SetChatMessage("system", Lang::Strings::CALIBRATING_STEP2);
                 break;
-            case ECHO_BASE_CMD_RECV_CALIBRATE_STEP2:
+            case VOCAT_BASE_CMD_RECV_CALIBRATE_STEP2:
                 ESP_LOGI(TAG, "Calibrate step 2 Done");
                 display->SetChatMessage("system", Lang::Strings::CALIBRATING_STEP3);
                 if (calibrate_semaphore_ != nullptr) {
                     xSemaphoreGive(calibrate_semaphore_);
                 }
                 break;
-            case ECHO_BASE_CMD_RECV_SWITCH_FISH_ATTACHED:
+            case VOCAT_BASE_CMD_RECV_SWITCH_FISH_ATTACHED:
                 ESP_LOGI(TAG, "Fish attached");
                 emote_display->InsertAnimDialog("eat", 3500);
                 break;
-            case ECHO_BASE_CMD_RECV_SWITCH_PAIR_DETECT:
+            case VOCAT_BASE_CMD_RECV_SWITCH_PAIR_DETECT:
                 ESP_LOGI(TAG, "Pair detect");
                 emote_display->SetEmotion("happy");
-                echo_base_control_set_action(ECHO_BASE_CMD_SET_ACTION_LOOK_AROUND);
+                vocat_base_control_set_action(VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND);
                 break;
             default:
                 ESP_LOGI(TAG, "Slide switch event: %d", event);
@@ -140,15 +140,15 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
         }
         break;
     }
-    case ECHO_BASE_CMD_RECV_PERCEPTION: {
+    case VOCAT_BASE_CMD_RECV_PERCEPTION: {
         ESP_LOGI(TAG, "Perception mode response, data_len=%d", data_len);
         break;
     }
-    case ECHO_BASE_CMD_RECV_ACTION: {
+    case VOCAT_BASE_CMD_RECV_ACTION: {
         ESP_LOGI(TAG, "Action response, data_len=%d", data_len);
         uint16_t event = (data[0] << 8) | data[1];
         switch (event) {
-        case ECHO_BASE_CMD_RECV_ACTION_DONE:
+        case VOCAT_BASE_CMD_RECV_ACTION_DONE:
             ESP_LOGI(TAG, "Action done");
             break;
         default:
@@ -157,15 +157,15 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
         }
         break;
     }
-    case ECHO_BASE_CMD_RECV_HEARTBEAT: {
+    case VOCAT_BASE_CMD_RECV_HEARTBEAT: {
         uint16_t event = (data[0] << 8) | data[1];
         switch (event) {
-        case ECHO_BASE_CMD_RECV_HEARTBEAT_ALIVE: {
+        case VOCAT_BASE_CMD_RECV_HEARTBEAT_ALIVE: {
             int64_t current_time = esp_timer_get_time() / 1000;  // Convert to milliseconds
-            bool was_offline = !echo_base_online_;
+            bool was_offline = !vocat_base_online_;
 
             last_heartbeat_time_ = current_time;
-            echo_base_online_ = true;
+            vocat_base_online_ = true;
 
             if (was_offline) {
                 ESP_LOGI(TAG, "Echo base connected (reinserted)");
@@ -199,8 +199,8 @@ void BaseControl::HeartbeatCheckTimerCallback(void* arg)
     int64_t time_since_last_heartbeat = current_time - self->last_heartbeat_time_;
 
     // Check if heartbeat timeout (2 seconds = 4 missed heartbeats at 500ms interval)
-    if (self->echo_base_online_ && time_since_last_heartbeat > BaseControl::HEARTBEAT_TIMEOUT_MS) {
-        self->echo_base_online_ = false;
+    if (self->vocat_base_online_ && time_since_last_heartbeat > BaseControl::HEARTBEAT_TIMEOUT_MS) {
+        self->vocat_base_online_ = false;
         ESP_LOGW(TAG, "Echo base disconnected (timeout: %lld ms)", time_since_last_heartbeat);
     }
 }

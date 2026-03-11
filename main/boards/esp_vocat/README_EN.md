@@ -1,4 +1,4 @@
-# EchoEar 喵伴
+# esp_vocat 喵伴
 
 ## Introduction
 
@@ -6,7 +6,7 @@
     <a href="https://oshwhub.com/esp-college/echoear"><b> LCSC Open Source Platform </b></a>
 </div>
 
-EchoEar 喵伴 is an intelligent AI development kit equipped with ESP32-S3-WROOM-1 module, 1.85-inch QSPI circular touch screen, dual microphone array, supporting offline voice wake-up and sound source localization algorithms. For hardware details, please refer to the [LCSC Open Source Project](https://oshwhub.com/esp-college/echoear).
+esp_vocat 喵伴 is an intelligent AI development kit equipped with ESP32-S3-WROOM-1 module, 1.85-inch QSPI circular touch screen, dual microphone array, supporting offline voice wake-up and sound source localization algorithms. For hardware details, please refer to the [LCSC Open Source Project](https://oshwhub.com/esp-college/echoear).
 
 ## Configuration and Build Commands
 
@@ -15,16 +15,16 @@ EchoEar 喵伴 is an intelligent AI development kit equipped with ESP32-S3-WROOM
 **⚠️ Important**: Before the first build, you need to run the following command in the project root directory to generate the default configuration file:
 
 ```bash
-python scripts/release.py echoear
+python scripts/release.py esp_vocat
 ```
 
 ### Version Selection
 
-EchoEar has two hardware versions:
+esp_vocat has two hardware versions:
 - **V1_0** (Open source version, default)
 - **V1_2**
 
-If you are using the V1_2 version, you need to manually modify the `select_board` configuration in the `main/boards/echoear/config.h` file.
+If you are using the V1_2 version, you need to manually modify the `select_board` configuration in the `main/boards/esp_vocat/config.h` file.
 
 ### Configure Build Target to ESP32S3
 
@@ -41,11 +41,11 @@ idf.py menuconfig
 Configure the following options:
 
 #### Basic Configuration
-- `Xiaozhi Assistant` → `Board Type` → Select `EchoEar`
+- `Xiaozhi Assistant` → `Board Type` → Select `esp_vocat`
 
 ### UI Style Selection
 
-EchoEar supports multiple different UI display styles, selectable through menuconfig:
+esp_vocat supports multiple different UI display styles, selectable through menuconfig:
 
 - `Xiaozhi Assistant` → `Select display style` → Select display style
 
@@ -54,7 +54,7 @@ EchoEar supports multiple different UI display styles, selectable through menuco
 ##### Expression Assets Mode - Default
 - **Configuration Option**: `CONFIG_FLASH_EXPRESSION_ASSETS=y`
 - **Features**: Generates asset files from `esp_emote_assets`
-- **Functions**: Uses custom asset files, asset files location is in `boards/echoear/assets` directory
+- **Functions**: Uses custom asset files, asset files location is in `boards/esp_vocat/assets` directory
 - **Use Case**: Default mode for firmware with base
 - **Class**: `emote::EmoteDisplay`
 
@@ -86,7 +86,7 @@ EchoEar supports multiple different UI display styles, selectable through menuco
 - **Use Case**: For users who prefer WeChat style
 - **Class**: `SpiLcdDisplay`
 
-> **Note**: EchoEar uses 16MB Flash and requires a dedicated partition table configuration to properly allocate storage space for applications, OTA updates, asset files, etc.
+> **Note**: esp_vocat uses 16MB Flash and requires a dedicated partition table configuration to properly allocate storage space for applications, OTA updates, asset files, etc.
 
 Press `S` to save, press `Q` to exit.
 
@@ -98,7 +98,7 @@ idf.py build
 
 **Flash**
 
-Connect EchoEar to your computer, **make sure to turn on the power**, and run:
+Connect esp_vocat to your computer, **make sure to turn on the power**, and run:
 
 ```bash
 idf.py flash
