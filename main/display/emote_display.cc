@@ -26,7 +26,7 @@
 #include "assets/lang_config.h"
 #include "board.h"
 #include "gfx.h"
-#include "echo_base_control.h"
+#include "vocat_base_control.h"
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 

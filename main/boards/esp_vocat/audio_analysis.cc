@@ -7,7 +7,7 @@
 #include "device_state.h"
 #include <esp_log.h>
 #include <cstring>
-#include "echo_base_control.h"
+#include "vocat_base_control.h"
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
@@ -66,7 +66,7 @@ void AudioAnalysis::BeatDetectionResultCallback(beat_detection_result_t result, 
 
     if (self->mode_ == AudioAnalysisMode::BEAT_DETECTION && result == BEAT_DETECTED) {
         ESP_LOGI(TAG, "Beat detected (result=%d), triggering beat swing action", result);
-        echo_base_control_set_action(ECHO_BASE_CMD_SET_ACTION_BEAT_SWING);
+        vocat_base_control_set_action(VOCAT_BASE_CMD_SET_ACTION_BEAT_SWING);
 
         Display* display = Board::GetInstance().GetDisplay();
         if (display != nullptr) {
@@ -81,7 +81,7 @@ void AudioAnalysis::BeatDetectionResultCallback(beat_detection_result_t result, 
 void AudioAnalysis::DoaTrackerResultCallback(float angle, void *ctx)
 {
     ESP_LOGI(TAG, "Estimated direction: %.2f", angle);
-    echo_base_control_set_angle(angle);
+    vocat_base_control_set_angle(angle);
 }
 
 void AudioAnalysis::SetAfeDataProcessCallback()

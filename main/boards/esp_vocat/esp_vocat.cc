@@ -1,4 +1,4 @@
-#include "EchoEar.h"
+#include "esp_vocat.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
 #include "display/lcd_display.h"
@@ -14,7 +14,7 @@
 #include <lvgl.h>
 #include "base_control.h"
 #include "audio_analysis.h"
-#include "echoear_tools.h"
+#include "dev_tools.h"
 #include "touch_sensor.h"
 #include "ui_bridge.h"
 
@@ -32,7 +32,7 @@
 #include <driver/gpio.h>
 #include <functional>
 
-#define TAG "EchoEar"
+#define TAG "esp_vocat"
 
 temperature_sensor_handle_t temp_sensor = NULL;
 
@@ -342,7 +342,7 @@ EspS3Cat::EspS3Cat() : boot_button_(BOOT_BUTTON_GPIO)
     audio_analysis_ = new AudioAnalysis();
     audio_analysis_->Initialize();
 
-    EchoEarTools::Initialize(this);
+    DevTools::Initialize(this);
 }
 
 AudioCodec* EspS3Cat::GetAudioCodec()

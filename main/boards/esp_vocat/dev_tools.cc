@@ -1,6 +1,6 @@
-#include "echoear_tools.h"
-#include "EchoEar.h"
-#include "echo_base_control.h"
+#include "dev_tools.h"
+#include "esp_vocat.h"
+#include "vocat_base_control.h"
 #include "audio_analysis.h"
 #include "mcp_server.h"
 #include "board.h"
@@ -8,9 +8,9 @@
 #include <esp_log.h>
 #include "customer_ui/alarm_api.h"
 
-#define TAG "EchoEarTools"
+#define TAG "DevTools"
 
-void EchoEarTools::Initialize(EspS3Cat* board)
+void DevTools::Initialize(EspS3Cat* board)
 {
     auto &mcp_server = McpServer::GetInstance();
 
@@ -30,21 +30,21 @@ void EchoEarTools::Initialize(EspS3Cat* board)
 
         ESP_LOGI(TAG, "&&& Do Action: %s", action.c_str());
         if (action == "shark_head") {
-            action_value = ECHO_BASE_CMD_SET_ACTION_SHARK_HEAD;
+            action_value = VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD;
         } else if (action == "shark_head_decay") {
-            action_value = ECHO_BASE_CMD_SET_ACTION_SHARK_HEAD_DECAY;
+            action_value = VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD_DECAY;
         } else if (action == "look_around")
         {
-            action_value = ECHO_BASE_CMD_SET_ACTION_LOOK_AROUND;
+            action_value = VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND;
         } else if (action == "beat_swing")
         {
-            action_value = ECHO_BASE_CMD_SET_ACTION_BEAT_SWING;
+            action_value = VOCAT_BASE_CMD_SET_ACTION_BEAT_SWING;
         } else if (action == "cat_nuzzle")
         {
-            action_value = ECHO_BASE_CMD_SET_ACTION_CAT_NUZZLE;
+            action_value = VOCAT_BASE_CMD_SET_ACTION_CAT_NUZZLE;
         } else if (action == "calibrate")
         {
-            echo_base_control_set_calibrate();
+            vocat_base_control_set_calibrate();
             BaseControl* base_control = board->GetBaseControl();
             if (base_control != nullptr) {
                 bool completed = base_control->WaitForCalibrationComplete(30000);
@@ -60,7 +60,7 @@ void EchoEarTools::Initialize(EspS3Cat* board)
 
         if (action_value != -1)
         {
-            esp_err_t ret = echo_base_control_set_action(action_value);
+            esp_err_t ret = vocat_base_control_set_action(action_value);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to set action: %d", ret);
                 return false;

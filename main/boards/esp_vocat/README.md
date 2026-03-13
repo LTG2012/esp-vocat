@@ -1,4 +1,4 @@
-# EchoEar 喵伴
+# esp_vocat 喵伴
 
 ## 简介
 
@@ -6,7 +6,7 @@
     <a href="https://oshwhub.com/esp-college/echoear"><b> 立创开源平台 </b></a>
 </div>
 
-EchoEar 喵伴是一款智能 AI 开发套件，搭载 ESP32-S3-WROOM-1 模组，1.85 寸 QSPI 圆形触摸屏，双麦阵列，支持离线语音唤醒与声源定位算法。硬件详情等可查看[立创开源项目](https://oshwhub.com/esp-college/echoear)。
+esp_vocat 喵伴是一款智能 AI 开发套件，搭载 ESP32-S3-WROOM-1 模组，1.85 寸 QSPI 圆形触摸屏，双麦阵列，支持离线语音唤醒与声源定位算法。硬件详情等可查看[立创开源项目](https://oshwhub.com/esp-college/echoear)。
 
 ## 配置、编译命令
 
@@ -15,16 +15,16 @@ EchoEar 喵伴是一款智能 AI 开发套件，搭载 ESP32-S3-WROOM-1 模组�
 **⚠️ 重要**: 首次编译前，需要在项目根目录运行以下命令生成默认配置文件：
 
 ```bash
-python scripts/release.py echoear
+python scripts/release.py esp_vocat
 ```
 
 ### 版本选择
 
-EchoEar 有两个硬件版本：
+esp_vocat 有两个硬件版本：
 - **V1_0** (开源版本，默认)
 - **V1_2**
 
-如果使用的是 V1_2 版本，需要手动修改 `main/boards/echoear/config.h` 文件中的 `select_board` 配置。
+如果使用的是 V1_2 版本，需要手动修改 `main/boards/esp_vocat/config.h` 文件中的 `select_board` 配置。
 
 ### 配置编译目标为 ESP32S3
 
@@ -41,11 +41,11 @@ idf.py menuconfig
 分别配置如下选项：
 
 #### 基本配置
-- `Xiaozhi Assistant` → `Board Type` → 选择 `EchoEar`
+- `Xiaozhi Assistant` → `Board Type` → 选择 `esp_vocat`
 
 ### UI风格选择
 
-EchoEar 支持多种不同的 UI 显示风格，通过 menuconfig 配置选择：
+esp_vocat 支持多种不同的 UI 显示风格，通过 menuconfig 配置选择：
 
 - `Xiaozhi Assistant` → `Select display style` → 选择显示风格
 
@@ -54,7 +54,7 @@ EchoEar 支持多种不同的 UI 显示风格，通过 menuconfig 配置选择�
 ##### 表情资源模式 (Expression assets mode) - 默认
 - **配置选项**: `CONFIG_FLASH_EXPRESSION_ASSETS=y`
 - **特点**: 从 `esp_emote_assets` 生成资源文件
-- **功能**: 使用自定义资源文件，资源文件位置为 `boards/echoear/assets` 目录
+- **功能**: 使用自定义资源文件，资源文件位置为 `boards/esp_vocat/assets` 目录
 - **适用**: 带底座固件的默认模式
 - **类**: `emote::EmoteDisplay`
 
@@ -86,7 +86,7 @@ EchoEar 支持多种不同的 UI 显示风格，通过 menuconfig 配置选择�
 - **适用**: 喜欢微信风格的用户
 - **类**: `SpiLcdDisplay`
 
-> **说明**: EchoEar 使用16MB Flash，需要使用专门的分区表配置来合理分配存储空间给应用程序、OTA更新、资源文件等。
+> **说明**: esp_vocat 使用16MB Flash，需要使用专门的分区表配置来合理分配存储空间给应用程序、OTA更新、资源文件等。
 
 按 `S` 保存，按 `Q` 退出。
 
@@ -98,7 +98,7 @@ idf.py build
 
 **烧录**
 
-将 EchoEar 连接至电脑，**注意打开电源**，并运行：
+将 esp_vocat 连接至电脑，**注意打开电源**，并运行：
 
 ```bash
 idf.py flash
