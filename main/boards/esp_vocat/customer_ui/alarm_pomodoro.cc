@@ -548,7 +548,13 @@ void alarm_pomodoro_start(void)
             pomodoro_set_state(&s_pomodoro_ui, TIMER_STATE_RUNNING);
             ESP_LOGI(TAG, "Timer started/resumed");
         } else {
-            ESP_LOGI(TAG, "Timer cannot start: no remaining time");
+            // Reset to 5 minutes (300 seconds) when remaining time is 0
+            s_pomodoro_ui.remaining_seconds = 5 * 60;
+            int32_t angle = (360 * s_pomodoro_ui.remaining_seconds) / TIMER_MAX_SECONDS;
+            update_time_from_angle(&s_pomodoro_ui, angle);
+            lv_timer_resume(s_pomodoro_ui.timer);
+            pomodoro_set_state(&s_pomodoro_ui, TIMER_STATE_RUNNING);
+            ESP_LOGI(TAG, "Timer reset to 5 minutes and started");
         }
     } else {
         ESP_LOGI(TAG, "Timer is already running");

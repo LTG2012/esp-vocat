@@ -9,8 +9,18 @@
 #include "device_state.h"
 #include <esp_log.h>
 #include <esp_timer.h>
+#include "customer_ui/alarm_manager.h"
+#include "customer_ui/alarm_api.h"
 
 #define TAG "BaseControl"
+
+const char *current_page = nullptr;
+
+static void lvgl_muyu_click_cb(void *arg)
+{
+    (void)arg;
+    lvgl_muyu_click();
+}
 
 BaseControl::BaseControl(EspS3Cat* board) : board_(board)
 {
@@ -18,6 +28,7 @@ BaseControl::BaseControl(EspS3Cat* board) : board_(board)
     last_heartbeat_time_ = 0;
     heartbeat_check_timer_ = nullptr;
     calibrate_semaphore_ = xSemaphoreCreateBinary();
+
     if (calibrate_semaphore_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create calibrate semaphore");
     }
@@ -107,7 +118,20 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
                 break;
             case VOCAT_BASE_CMD_RECV_SWITCH_SLIDE_UP:
                 ESP_LOGI(TAG, "Slide switch up");
-                app.ToggleChatState();
+                current_page = ui_bridge_get_current_page();
+                if(strcmp(current_page, PAGE_POMODORO) == 0) {
+                    alarm_start_pomodoro(5);
+                    ESP_LOGI(TAG, "Restart POMODORO");
+                }else{
+                app.ToggleChatState();}
+                break;
+            case VOCAT_BASE_CMD_RECV_SWITCH_SINGLE_CLICK:
+                ESP_LOGI(TAG, "Single click");
+                current_page = ui_bridge_get_current_page();
+                if (strcmp(current_page, PAGE_MUYU) == 0) {
+                    lv_async_call(lvgl_muyu_click_cb, nullptr);
+                    ESP_LOGI(TAG, "Set MAIN_EVENT_PLAY_MUYU");
+                }
                 break;
             case VOCAT_BASE_CMD_RECV_CALIBRATE_START:
                 ESP_LOGI(TAG, "Calibrate start");

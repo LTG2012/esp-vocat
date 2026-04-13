@@ -1,0 +1,21 @@
+dependencies:
+  cmake_utilities: 0.*
+  idf: '>=4.4'
+description: Touch sensor enhanced FSM for better anti-interference performance (Experimental)
+files:
+  exclude:
+  - '*.c'
+  - '**/build*/**/*'
+issues: https://github.com/espressif/esp-iot-solution/issues
+repository: https://github.com/espressif/esp-iot-solution.git
+sbom:
+  originator: 'Organization: Espressif Systems (Shanghai) CO LTD'
+  supplier: 'Organization: Espressif Systems (Shanghai) CO LTD'
+targets:
+- esp32
+- esp32s2
+- esp32s3
+- esp32p4
+- linux
+url: https://github.com/espressif/esp-iot-solution/tree/master/components/touch/
+version: 0.8.1~1

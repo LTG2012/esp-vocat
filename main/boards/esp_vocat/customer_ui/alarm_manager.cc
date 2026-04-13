@@ -3,8 +3,15 @@
 #include <esp_lv_adapter.h>
 #include "alarm_manager.h"
 #include "alarm_api.h"
+#include "csi_ui/ui/ui.h"
+#include "csi_ui/esp_radar_csi.h"
 
 #define TAG "alarm_manager"
+
+using esp_brookesia::apps::RadarCSI;
+
+static constexpr const char* PAGE_SCREEN_W = "SCREEN_W";
+static constexpr const char* PAGE_CSI_BEHAV = "CSI_BEHAV";
 
 // ============================================================================
 // Type Definitions
@@ -18,6 +25,9 @@
 static lv_obj_t *container_pomodoro = NULL;
 static lv_obj_t *container_sleep = NULL;
 static lv_obj_t *container_time_up = NULL;
+static lv_obj_t *container_muyu = NULL;
+static lv_obj_t *container_screenW = NULL;
+static lv_obj_t *container_csi_behav = NULL;
 
 
 // ============================================================================
@@ -42,6 +52,29 @@ static bool main_ui_page_switch_callback(const char *target_page, void *user_dat
         return true;  /* Handled, skip default switch */
     }
 
+    /* CSI waveform page lifecycle */
+    if (target_page != NULL && strcmp(target_page, PAGE_SCREEN_W) == 0 &&
+            (current_page == NULL || strcmp(current_page, PAGE_SCREEN_W) != 0)) {
+        RadarCSI *radar = RadarCSI::getInstance();
+        if (radar != nullptr) {
+            ESP_LOGI(TAG, "Enter SCREEN_W: start CSI pipeline");
+            radar->init();
+            radar->initCharts();
+            radar->resumeDataProcessing();
+            radar->startPing();
+            radar->startPipeline();
+        }
+    }
+
+    if (current_page != NULL && strcmp(current_page, PAGE_SCREEN_W) == 0 &&
+            (target_page == NULL || strcmp(target_page, PAGE_SCREEN_W) != 0)) {
+        RadarCSI *radar = RadarCSI::getInstance();
+        if (radar != nullptr) {
+            ESP_LOGI(TAG, "Leave SCREEN_W: stop ping");
+            radar->stopPing();
+        }
+    }
+
     return false;  /* Use default switch */
 }
 
@@ -56,12 +89,23 @@ void alarm_create_ui()
     container_sleep = alarm_sleep_24h_create_with_parent(scr);
     ui_bridge_register_page_with_cycle(PAGE_SLEEP, &container_sleep, true);
 
+    /* Create and register muuyu container */
+    container_muyu = alarm_muyu_create_with_parent(scr);
+    ui_bridge_register_page_with_cycle(PAGE_MUYU, &container_muyu, true);
+
     /* Create and register time up container */
     container_time_up = alarm_time_up_create_with_parent(scr);
     ui_bridge_register_page_with_cycle(PAGE_TIME_UP, &container_time_up, false);
 
-    /* Register page switch callback for custom handling (e.g., pomodoro) */
-    ui_bridge_set_page_switch_callback(main_ui_page_switch_callback, NULL);
+    // /* Create and register CSI pages */
+    // container_screenW = ui_ScreenW_screen_init(scr);
+    // ui_bridge_register_page_with_cycle(PAGE_SCREEN_W, &container_screenW, true);
+
+    // container_csi_behav = ui_csi_behav_Screen_screen_init(scr);
+    // ui_bridge_register_page_with_cycle(PAGE_CSI_BEHAV, &container_csi_behav, true);
+
+    // /* Register page switch callback for custom handling (e.g., pomodoro) */
+    // ui_bridge_set_page_switch_callback(main_ui_page_switch_callback, NULL);
 }
 
 void alarm_start_pomodoro(int32_t minutes)
@@ -150,4 +194,32 @@ bool alarm_get_sleep_end_time(int32_t *end_hour, int32_t *end_min)
 {
     /* Delegate to sleep_24h module */
     return alarm_sleep_24h_get_end_time(end_hour, end_min);
+}
+
+bool alarm_toggle_sleep_duration_display(void)
+{
+    ESP_LOGI(TAG, "Toggle sleep duration display");
+    const char *current_page = ui_bridge_get_current_page();
+    if (current_page == NULL || strcmp(current_page, PAGE_SLEEP) != 0) {
+        ESP_LOGI(TAG, "Not on sleep page (current=%s)",
+                 current_page ? current_page : "NULL");
+        return false;
+    } else {
+        alarm_sleep_24h_trigger_center_btn();
+    }
+    return true;
+}
+
+bool alarm_time_up_snooze(void)
+{
+    ESP_LOGI(TAG, "Time up snooze");
+    const char *current_page = ui_bridge_get_current_page();
+    if (current_page == NULL || strcmp(current_page, PAGE_TIME_UP) != 0) {
+        ESP_LOGI(TAG, "Not on time up page (current=%s)",
+                 current_page ? current_page : "NULL");
+        return false;
+    } else {
+        alarm_time_up_snooze_impl();
+    }
+    return true;
 }

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <wifi_station.h>
+#include "ui_bridge.h"
 
 #define TAG "AudioAnalysis"
 
@@ -140,6 +141,11 @@ void AudioAnalysis::SetMode(AudioAnalysisMode mode)
 
 void AudioAnalysis::OnAudioDataProcessed(const int16_t* audio_data, size_t bytes_per_channel, size_t channels)
 {
+    const char *current_page = ui_bridge_get_current_page();
+    if (current_page == NULL || strcmp(current_page, "DUMMY") != 0) {
+        return;
+    }
+
     //Incoming: bytes=1024, channels=2
     // ESP_LOGI(TAG, "Incoming: bytes=%d, channels=%d", bytes_per_channel, channels);
 
@@ -157,12 +163,11 @@ void AudioAnalysis::OnAudioDataProcessed(const int16_t* audio_data, size_t bytes
 
     case AudioAnalysisMode::DOA_FOLLOW: {
         auto &app = Application::GetInstance();
-        if (app.GetDeviceState() == kDeviceStateSpeaking) {
-            break;
-        }
-        // Feed to audio DOA
-        if (doa_app_handle_ != nullptr) {
-            audio_doa_app_data_write(doa_app_handle_, (uint8_t *)audio_data, bytes_per_channel * channels);
+        if (app.GetDeviceState() == kDeviceStateListening || app.GetDeviceState() == kDeviceStateIdle) {
+            // Feed to audio DOA
+            if (doa_app_handle_ != nullptr) {
+                audio_doa_app_data_write(doa_app_handle_, (uint8_t *)audio_data, bytes_per_channel * channels);
+            }
         }
         break;
     }
