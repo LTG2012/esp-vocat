@@ -28,6 +28,18 @@ lv_obj_t *alarm_time_up_create_with_parent(lv_obj_t *parent);
  */
 void alarm_time_up_set_origin(const char *origin_page);
 
+/**
+ * @brief Trigger snooze action (remind later 5 minutes)
+ *
+ * Performs the same action as clicking the "Snooze 5 min" button:
+ * - If origin is SLEEP: snooze sleep timer by 5 minutes
+ * - If origin is POMODORO: start new 5-minute pomodoro timer
+ * - Otherwise: switch to home page
+ *
+ * @note This is an internal function. External modules should use alarm_api.h::alarm_time_up_snooze() instead.
+ */
+void alarm_time_up_snooze_impl(void);
+
 #ifdef __cplusplus
 }
 #endif

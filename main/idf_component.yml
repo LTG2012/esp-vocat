@@ -5,6 +5,8 @@ dependencies:
   espressif/esp_lcd_gc9a01: ==2.0.1
   espressif/esp_lcd_st77916: ^1.0.1
   espressif/esp_lcd_axs15231b: ^1.0.0
+  espressif/esp_csi_gain_ctrl: ^0.1.2
+  espressif/iqmath: ^1.11.0
 
   espressif/esp_lcd_st7701:
     version: ^1.1.4
@@ -45,10 +47,11 @@ dependencies:
   espressif/esp_lvgl_adapter: ^0.1.0
   espressif2022/image_player: ^1.1.1
   espressif2022/esp_emote_gfx: ^2.0.0
-  espressif2022/esp_emote_assets: ^0.0.3
+  espressif2022/esp_emote_assets: ^0.1.0
+  espressif2022/esp_emote_expression: ^0.1.0
   espressif2022/esp_vocat_base_control: ^1.0.0
   espfriends/beat_detection: ^1.0.0
-  espfriends/audio_doa: ^1.0.0
+  espfriends/audio_doa: ^1.2.0
   espressif/esp_lv_eaf_player: ^0.1.0
   espressif/touch_slider_sensor: ^0.2.0
   espressif/touch_button: ^0.1.0

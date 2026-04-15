@@ -1,8 +1,10 @@
 #include "ui_bridge.h"
 #include "board.h"
+#include "wifi_board.h"
 #include "display/emote_display.h"
 #include "customer_ui/alarm_api.h"
 #include "application.h"
+#include <wifi_station.h>
 #include <esp_log.h>
 #include <lvgl.h>
 #include <esp_lv_adapter.h>
@@ -42,6 +44,8 @@ static void *s_page_switch_user_data = NULL;
 
 /* Base emote UI container */
 static lv_obj_t *s_base_container = NULL;
+/* Center icon container for event monitoring (100x100) */
+static lv_obj_t *s_center_icon = NULL;
 
 /* Cached display pointer for emote refresh */
 static emote::EmoteDisplay *s_cached_emote_display = nullptr;
@@ -62,30 +66,37 @@ static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gest
  */
 static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gesture, lv_coord_t start_x, lv_coord_t start_y)
 {
+    bool result = false;
     switch (gesture) {
     case UI_BRIDGE_GESTURE_SWIPE_UP:
         /* Must start from bottom edge and center X */
-        return (start_y > (DISPLAY_HEIGHT - UI_BRIDGE_EDGE_THRESHOLD)) &&
+        result = (start_y > (DISPLAY_HEIGHT - UI_BRIDGE_EDGE_THRESHOLD)) &&
                (LV_ABS(start_x - UI_BRIDGE_CENTER_X) <= UI_BRIDGE_CENTER_RANGE);
+        break;
 
     case UI_BRIDGE_GESTURE_SWIPE_DOWN:
         /* Must start from top edge and center X */
-        return (start_y < UI_BRIDGE_EDGE_THRESHOLD) &&
+        result = (start_y < UI_BRIDGE_EDGE_THRESHOLD) &&
                (LV_ABS(start_x - UI_BRIDGE_CENTER_X) <= UI_BRIDGE_CENTER_RANGE);
+        break;
 
     case UI_BRIDGE_GESTURE_SWIPE_LEFT:
         /* Must start from right edge and center Y */
-        return (start_x > (DISPLAY_WIDTH - UI_BRIDGE_EDGE_THRESHOLD)) &&
+        result = (start_x > (DISPLAY_WIDTH - UI_BRIDGE_EDGE_THRESHOLD)) &&
                (LV_ABS(start_y - UI_BRIDGE_CENTER_Y) <= UI_BRIDGE_CENTER_RANGE);
+        break;
 
     case UI_BRIDGE_GESTURE_SWIPE_RIGHT:
         /* Must start from left edge and center Y */
-        return (start_x < UI_BRIDGE_EDGE_THRESHOLD) &&
+        result = (start_x < UI_BRIDGE_EDGE_THRESHOLD) &&
                (LV_ABS(start_y - UI_BRIDGE_CENTER_Y) <= UI_BRIDGE_CENTER_RANGE);
+        break;
 
     default:
-        return true;  /* No position requirement for other gestures */
+        result = true;  /* No position requirement for other gestures */
+        break;
     }
+    return result;
 }
 
 /* Touch gesture event callback */
@@ -114,59 +125,6 @@ static void ui_bridge_gesture_event_cb(lv_event_t *e)
     case LV_EVENT_PRESSING: {
         if (!state->active || state->handled || !indev) {
             break;
-        }
-
-        lv_point_t p;
-        lv_indev_get_point(indev, &p);
-        lv_coord_t dx = p.x - state->start_x;
-        lv_coord_t dy = p.y - state->start_y;
-
-        /* Log movement for debugging */
-        static lv_coord_t last_dx = 0, last_dy = 0;
-        if (LV_ABS(dx - last_dx) > 5 || LV_ABS(dy - last_dy) > 5) {
-            ESP_LOGD(TAG, "PRESSING: dx=%ld, dy=%ld, threshold=%d",
-                     (long)dx, (long)dy, UI_BRIDGE_GESTURE_SWIPE_THRESHOLD);
-            last_dx = dx;
-            last_dy = dy;
-        }
-
-        bool dx_exceeds = LV_ABS(dx) >= UI_BRIDGE_GESTURE_SWIPE_THRESHOLD;
-        bool dy_exceeds = LV_ABS(dy) >= UI_BRIDGE_GESTURE_SWIPE_THRESHOLD;
-
-        if ((dx_exceeds && !dy_exceeds) || (!dx_exceeds && dy_exceeds)) {
-            ui_bridge_gesture_type_t gesture = UI_BRIDGE_GESTURE_NONE;
-
-            /* Determine swipe direction based on dominant axis */
-            if (LV_ABS(dx) > LV_ABS(dy)) {
-                /* Horizontal swipe */
-                if (dx < 0) {
-                    gesture = UI_BRIDGE_GESTURE_SWIPE_LEFT;
-                } else {
-                    gesture = UI_BRIDGE_GESTURE_SWIPE_RIGHT;
-                }
-            } else {
-                /* Vertical swipe */
-                if (dy < 0) {
-                    gesture = UI_BRIDGE_GESTURE_SWIPE_UP;
-                } else {
-                    gesture = UI_BRIDGE_GESTURE_SWIPE_DOWN;
-                }
-            }
-
-            if (gesture != UI_BRIDGE_GESTURE_NONE) {
-                if (ui_bridge_check_gesture_start_position(gesture, state->start_x, state->start_y)) {
-                    ESP_LOGD(TAG, "swipe detected: %d (start: %ld, %ld)", gesture,
-                             (long)state->start_x, (long)state->start_y);
-                    // ui_bridge_handle_gesture_navigation(gesture);
-                    state->handled = true;
-                } else {
-                    ESP_LOGD(TAG, "swipe gesture %d rejected: invalid start position (%ld, %ld)",
-                             gesture, (long)state->start_x, (long)state->start_y);
-                }
-            }
-        } else if (dx_exceeds && dy_exceeds) {
-            ESP_LOGD(TAG, "Both axes exceed threshold (dx=%ld, dy=%ld) - treating as drag, not swipe",
-                     (long)dx, (long)dy);
         }
         break;
     }
@@ -222,12 +180,12 @@ static void ui_bridge_gesture_event_cb(lv_event_t *e)
                         ui_bridge_handle_gesture_navigation(gesture);
                         state->handled = true;
                     } else {
-                        ESP_LOGD(TAG, "swipe gesture %d rejected: invalid start position (%ld, %ld)",
+                        ESP_LOGE(TAG, "swipe gesture %d rejected: invalid start position (%ld, %ld)",
                                  gesture, (long)state->start_x, (long)state->start_y);
                     }
                 }
             } else if (dx_exceeds && dy_exceeds) {
-                ESP_LOGD(TAG, "Both axes exceed threshold (dx=%ld, dy=%ld) - treating as drag, not swipe",
+                ESP_LOGW(TAG, "Both axes exceed threshold (dx=%ld, dy=%ld) - treating as drag, not swipe",
                          (long)dx, (long)dy);
             } else {
                 /* It's a press (not a swipe) */
@@ -237,7 +195,7 @@ static void ui_bridge_gesture_event_cb(lv_event_t *e)
                 } else {
                     gesture = UI_BRIDGE_GESTURE_SHORT_PRESS;
                 }
-                ESP_LOGD(TAG, "press detected: %d (duration: %lu ms)", gesture, press_duration);
+                ESP_LOGD(TAG, "press detected: %d (duration: %lu ms, dx: %ld, dy: %ld)", gesture, press_duration, LV_ABS(dx), LV_ABS(dy));
             }
         }
 
@@ -360,7 +318,12 @@ static void ui_bridge_base_container_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
         auto &app = Application::GetInstance();
-        app.ToggleChatState();
+        if (app.GetDeviceState() == kDeviceStateStarting &&
+            !WifiStation::GetInstance().IsConnected()) {
+            static_cast<WifiBoard&>(Board::GetInstance()).ResetWifiConfiguration();
+        } else {
+            app.ToggleChatState();
+        }
     }
 }
 
@@ -383,12 +346,22 @@ void ui_bridge_init(Display *display)
     lv_obj_align(s_base_container, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_opa(s_base_container, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(s_base_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_base_container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_base_container, LV_OBJ_FLAG_CLICKABLE);  /* Disable click on full screen */
 
     /* Register base container as default page */
     ui_bridge_register_page(UI_BRIDGE_PAGE_HOME, &s_base_container);
     ui_bridge_switch_page(UI_BRIDGE_PAGE_HOME);  /* Set as default page */
-    lv_obj_add_event_cb(s_base_container, ui_bridge_base_container_event_cb, LV_EVENT_ALL, NULL);
+
+    /* Create center icon container (100x100) for event monitoring */
+    s_center_icon = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_center_icon);
+    lv_obj_set_size(s_center_icon, 100, 100);
+    lv_obj_align(s_center_icon, LV_ALIGN_CENTER, 0, 0);  /* Center the icon */
+    lv_obj_set_style_bg_opa(s_center_icon, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(s_center_icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_center_icon, LV_OBJ_FLAG_CLICKABLE);
+    /* Only monitor events on the center icon */
+    lv_obj_add_event_cb(s_center_icon, ui_bridge_base_container_event_cb, LV_EVENT_ALL, NULL);
 
     /* Create main UI (which will register its own pages) */
     alarm_create_ui();

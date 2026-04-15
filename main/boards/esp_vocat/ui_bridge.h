@@ -17,7 +17,7 @@
 
 /* Gesture detection constants */
 #define UI_BRIDGE_GESTURE_LONG_PRESS_TIME_MS     500      /* Long press duration in milliseconds */
-#define UI_BRIDGE_GESTURE_SWIPE_THRESHOLD        80       /* Minimum distance for swipe detection */
+#define UI_BRIDGE_GESTURE_SWIPE_THRESHOLD        30       /* Minimum distance for swipe detection */
 
 /* Gesture start position validation constants */
 #define UI_BRIDGE_EDGE_THRESHOLD                 30       /* Distance from edge to be considered edge region */

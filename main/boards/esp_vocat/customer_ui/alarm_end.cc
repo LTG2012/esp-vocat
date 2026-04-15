@@ -32,18 +32,24 @@ static void remind_later_btn_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Snooze 5 min button clicked");
+        alarm_time_up_snooze_impl();
+    }
+}
 
-        if (s_time_up_ui.origin_page != NULL) {
-            if (strcmp(s_time_up_ui.origin_page, PAGE_SLEEP) == 0) {
-                alarm_sleep_24h_snooze(5);
-            } else if (strcmp(s_time_up_ui.origin_page, PAGE_POMODORO) == 0) {
-                alarm_start_pomodoro(5);
-            }
-            s_time_up_ui.origin_page = NULL;  /* Clear origin after use */
-        } else {
-            main_ui_switch_page(UI_BRIDGE_PAGE_HOME);
+void alarm_time_up_snooze_impl(void)
+{
+    ESP_LOGI(TAG, "Snooze 5 min triggered");
+
+    if (s_time_up_ui.origin_page != NULL) {
+
+        if (strcmp(s_time_up_ui.origin_page, PAGE_SLEEP) == 0) {
+            alarm_sleep_24h_snooze(5);
+        } else if (strcmp(s_time_up_ui.origin_page, PAGE_POMODORO) == 0) {
+            alarm_start_pomodoro(5);
         }
+        s_time_up_ui.origin_page = NULL;  /* Clear origin after use */
+    } else {
+        main_ui_switch_page(UI_BRIDGE_PAGE_HOME);
     }
 }
 

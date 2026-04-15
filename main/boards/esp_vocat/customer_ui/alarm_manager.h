@@ -7,6 +7,7 @@
 #include "esp_lv_adapter.h"
 #include "alarm_pomodoro.h"
 #include "alarm_sleep_24h.h"
+#include "alarm_muyu.h"
 #include "alarm_end.h"
 
 #define SCREEN_WIDTH    360
@@ -20,6 +21,8 @@ extern "C" {
 LV_FONT_DECLARE(lv_font_montserrat_20);
 LV_FONT_DECLARE(lv_font_montserrat_32);
 LV_FONT_DECLARE(lv_font_montserrat_40);
+LV_FONT_DECLARE(ui_font_Heiti18);
+LV_FONT_DECLARE(ui_font_Heiti24);
 
 // Image declarations
 LV_IMG_DECLARE(time_start);
@@ -28,6 +31,7 @@ LV_IMG_DECLARE(time_sleep);
 LV_IMG_DECLARE(time_arc_texture);
 LV_IMG_DECLARE(clock_loop);
 LV_IMG_DECLARE(watch_bg);
+LV_IMG_DECLARE(muyu_white);
 extern const uint8_t clock_loop_eaf[699139];
 
 /**

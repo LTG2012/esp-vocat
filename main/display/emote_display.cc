@@ -16,6 +16,7 @@
 #include <esp_timer.h>
 #include <esp_lv_adapter.h>
 #include <lvgl.h>
+#include <esp_psram.h>
 
 // FreeRTOS headers
 #include <freertos/FreeRTOS.h>
@@ -27,6 +28,10 @@
 #include "board.h"
 #include "gfx.h"
 #include "vocat_base_control.h"
+#include "expression_emote.h"
+#if CONFIG_BOARD_TYPE_ESP_VOCAT
+#include "ui_bridge.h"
+#endif
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 
@@ -38,540 +43,193 @@ namespace emote {
 
 static const char* TAG = "EmoteDisplay";
 
-// UI Element Names - Centralized Management
-#define UI_ELEMENT_EYE_ANIM      "eye_anim"
-#define UI_ELEMENT_TOAST_LABEL   "toast_label"
-#define UI_ELEMENT_CLOCK_LABEL   "clock_label"
-#define UI_ELEMENT_LISTEN_ANIM   "listen_anim"
-#define UI_ELEMENT_STATUS_ICON   "status_icon"
-#define UI_ELEMENT_EMERG_DLG     "emerg_dlg"
-
-// Icon Names - Centralized Management
-#define ICON_MIC                 "icon_mic"
-#define ICON_BATTERY             "icon_tips"
-#define ICON_SPEAKER_ZZZ         "icon_speaker"
-#define ICON_WIFI_FAILED         "icon_WiFi_failed"
-#define ICON_WIFI_OK             "icon_wifi"
-#define ICON_LISTEN              "listen"
-
-using FlushIoReadyCallback = std::function<bool(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void*)>;
-using FlushCallback = std::function<void(gfx_handle_t, int, int, int, int, const void*)>;
-
-// ============================================================================
-// Global Variables
-// ============================================================================
-
-// UI element management
-static gfx_obj_t* g_obj_label_toast = nullptr;
-static gfx_obj_t* g_obj_label_clock = nullptr;
-static gfx_obj_t* g_obj_anim_eye = nullptr;
-static gfx_obj_t* g_obj_anim_listen = nullptr;
-static gfx_obj_t* g_obj_img_status = nullptr;
-static gfx_obj_t* g_obj_anim_emerg_dlg = nullptr;
-
-// Track current icon to determine when to show time
-static std::string g_current_icon_type = ICON_WIFI_FAILED;
-static gfx_image_dsc_t g_icon_img_dsc;
-
-
 // ============================================================================
 // Forward Declarations
 // ============================================================================
 
 class EmoteDisplay;
-class EmoteEngine;
-
-enum class UIDisplayMode : uint8_t {
-    SHOW_LISTENING = 1,  // Show g_obj_anim_listen
-    SHOW_TIME = 2,      // Show g_obj_label_clock
-    SHOW_TIPS = 3       // Show g_obj_label_toast
-};
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-// Function to convert align string to GFX_ALIGN enum value
-char StringToGfxAlign(const std::string &align_str)
+// Flush callback for emote
+static void OnFlushCallback(int x_start, int y_start, int x_end, int y_end, const void* data, emote_handle_t manager)
 {
-    static const std::unordered_map<std::string, char> align_map = {
-        {"GFX_ALIGN_DEFAULT",           GFX_ALIGN_DEFAULT},
-        {"GFX_ALIGN_TOP_LEFT",          GFX_ALIGN_TOP_LEFT},
-        {"GFX_ALIGN_TOP_MID",           GFX_ALIGN_TOP_MID},
-        {"GFX_ALIGN_TOP_RIGHT",         GFX_ALIGN_TOP_RIGHT},
-        {"GFX_ALIGN_LEFT_MID",          GFX_ALIGN_LEFT_MID},
-        {"GFX_ALIGN_CENTER",            GFX_ALIGN_CENTER},
-        {"GFX_ALIGN_RIGHT_MID",         GFX_ALIGN_RIGHT_MID},
-        {"GFX_ALIGN_BOTTOM_LEFT",       GFX_ALIGN_BOTTOM_LEFT},
-        {"GFX_ALIGN_BOTTOM_MID",        GFX_ALIGN_BOTTOM_MID},
-        {"GFX_ALIGN_BOTTOM_RIGHT",      GFX_ALIGN_BOTTOM_RIGHT},
-        {"GFX_ALIGN_OUT_TOP_LEFT",      GFX_ALIGN_OUT_TOP_LEFT},
-        {"GFX_ALIGN_OUT_TOP_MID",       GFX_ALIGN_OUT_TOP_MID},
-        {"GFX_ALIGN_OUT_TOP_RIGHT",     GFX_ALIGN_OUT_TOP_RIGHT},
-        {"GFX_ALIGN_OUT_LEFT_TOP",      GFX_ALIGN_OUT_LEFT_TOP},
-        {"GFX_ALIGN_OUT_LEFT_MID",      GFX_ALIGN_OUT_LEFT_MID},
-        {"GFX_ALIGN_OUT_LEFT_BOTTOM",   GFX_ALIGN_OUT_LEFT_BOTTOM},
-        {"GFX_ALIGN_OUT_RIGHT_TOP",     GFX_ALIGN_OUT_RIGHT_TOP},
-        {"GFX_ALIGN_OUT_RIGHT_MID",     GFX_ALIGN_OUT_RIGHT_MID},
-        {"GFX_ALIGN_OUT_RIGHT_BOTTOM",  GFX_ALIGN_OUT_RIGHT_BOTTOM},
-        {"GFX_ALIGN_OUT_BOTTOM_LEFT",   GFX_ALIGN_OUT_BOTTOM_LEFT},
-        {"GFX_ALIGN_OUT_BOTTOM_MID",    GFX_ALIGN_OUT_BOTTOM_MID},
-        {"GFX_ALIGN_OUT_BOTTOM_RIGHT",  GFX_ALIGN_OUT_BOTTOM_RIGHT}
-    };
+    (void)manager;
 
-    const auto it = align_map.find(align_str);
-    if (it != align_map.cend()) {
-        return it->second;
-    }
-
-    ESP_LOGW(TAG, "Unknown align string: %s, using GFX_ALIGN_DEFAULT", align_str.c_str());
-    return GFX_ALIGN_DEFAULT;
-}
-
-// ============================================================================
-// EmoteEngine Class Declaration
-// ============================================================================
-
-class EmoteEngine {
-public:
-    EmoteEngine(const esp_lcd_panel_handle_t panel, const esp_lcd_panel_io_handle_t panel_io,
-                const int width, const int height, EmoteDisplay* const display);
-    ~EmoteEngine();
-
-    void SetEyes(const std::string &emoji_name, const bool repeat, const int fps, EmoteDisplay* const display);
-    void SetIcon(const std::string &icon_name, EmoteDisplay* const display);
-
-    void* GetEngineHandle() const
-    {
-        return engine_handle_;
-    }
-
-    // Dialog animation methods
-    bool SetDialogAnim(const std::string &emoji_name, EmoteDisplay* const display);
-    void* GetDialogTimer() const { return dialog_timer_; }
-    void SetDialogTimer(void* timer) { dialog_timer_ = timer; }
-    void ClearDialogTimer() { dialog_timer_ = nullptr; }
-    std::string GetCurrentDialogEmoji() const { return current_dialog_emoji_; }
-    void ClearCurrentDialogEmoji() { current_dialog_emoji_.clear(); }
-
-    // Callback functions (public to be accessible from static helper functions)
-    static void OnFlush(const gfx_handle_t handle, const int x_start, const int y_start, const int x_end, const int y_end, const void* const color_data);
-    static void OnDialogTimer(void* user_ctx);
-
-private:
-    gfx_handle_t engine_handle_;
-    void* dialog_timer_ = nullptr;
-    std::string current_dialog_emoji_;  // 当前显示的 dialog emoji 名称
-};
-
-// ============================================================================
-// UI Management Functions
-// ============================================================================
-
-static void SetUIDisplayMode(const UIDisplayMode mode, EmoteDisplay* const display)
-{
-    if (!display) {
-        ESP_LOGE(TAG, "SetUIDisplayMode: display is nullptr");
-        return;
-    }
-
-    gfx_obj_set_visible(g_obj_anim_listen, false);
-    gfx_obj_set_visible(g_obj_label_clock, false);
-    gfx_obj_set_visible(g_obj_label_toast, false);
-
-    // Show the selected control
-    switch (mode) {
-    case UIDisplayMode::SHOW_LISTENING: {
-        gfx_obj_set_visible(g_obj_anim_listen, true);
-        const AssetData emoji_data = display->GetIconData(ICON_LISTEN);
-        if (emoji_data.data) {
-            gfx_anim_set_src(g_obj_anim_listen, emoji_data.data, emoji_data.size);
-            gfx_anim_set_segment(g_obj_anim_listen, 0, 0xFFFF, 20, true);
-            gfx_anim_start(g_obj_anim_listen);
+    lv_display_t *disp = lv_display_get_default();
+    if (disp != nullptr) {
+        bool state = esp_lv_adapter_get_dummy_draw_enabled(disp);
+        if (state) {
+            esp_lv_adapter_dummy_draw_blit(
+                disp, x_start, y_start, x_end, y_end, data, true);
         }
-        break;
     }
-    case UIDisplayMode::SHOW_TIME:
-        gfx_obj_set_visible(g_obj_label_clock, true);
-        break;
-    case UIDisplayMode::SHOW_TIPS:
-        gfx_obj_set_visible(g_obj_label_toast, true);
-        break;
-    }
+    // ESP_LOGI(TAG, "OnFlushCallback: x_start: %d, y_start: %d, x_end: %d, y_end: %d", x_start, y_start, x_end, y_end);
+    emote_notify_flush_finished(manager);
 }
 
 // ============================================================================
 // Graphics Initialization Functions
 // ============================================================================
 
-static void InitializeGraphics(const esp_lcd_panel_handle_t panel, gfx_handle_t* const engine_handle,
-                               const int width, const int height)
+static emote_handle_t InitializeEmote(const esp_lcd_panel_handle_t panel, const int width, const int height)
 {
-    if (!panel || !engine_handle) {
-        ESP_LOGE(TAG, "InitializeGraphics: Invalid parameters");
-        return;
+    if (!panel) {
+        ESP_LOGE(TAG, "InitializeEmote: Invalid parameters");
+        return nullptr;
     }
 
-    gfx_core_config_t gfx_cfg = {
-        .flush_cb = EmoteEngine::OnFlush,
-        .user_data = panel,
+    emote_config_t emote_cfg = {
         .flags = {
             .swap = true,
             .double_buffer = true,
             .buff_dma = false,
-            .buff_spiram = true,
         },
-        .h_res = static_cast<uint32_t>(width),
-        .v_res = static_cast<uint32_t>(height),
-        .fps = 30,
+        .gfx_emote = {
+            .h_res = width,
+            .v_res = height,
+            .fps = 30,
+        },
         .buffers = {
-            .buf1 = nullptr,
-            .buf2 = nullptr,
             .buf_pixels = static_cast<size_t>(width * 16),
         },
-        .task = GFX_EMOTE_INIT_CONFIG()
+        .task = {
+            .task_priority = 5,
+            .task_stack = 6 * 1024,
+            .task_affinity = 0,
+            .task_stack_in_ext = true,
+        },
+        .flush_cb = OnFlushCallback,
     };
 
-    gfx_cfg.task.task_stack_caps = MALLOC_CAP_DEFAULT;
-    gfx_cfg.task.task_affinity = 0;
-    gfx_cfg.task.task_priority = 5;
-    gfx_cfg.task.task_stack = 8 * 1024;
+    emote_handle_t emote_handle = emote_init(&emote_cfg);
+    if (!emote_handle) {
+        ESP_LOGE(TAG, "Failed to initialize emote");
+        return nullptr;
+    }
 
-    *engine_handle = gfx_emote_init(&gfx_cfg);
+    return emote_handle;
 }
 
-static void SetupUI(const gfx_handle_t engine_handle, EmoteDisplay* const display)
-{
-    if (!display) {
-        ESP_LOGE(TAG, "SetupUI: display is nullptr");
-        return;
-    }
-
-    gfx_emote_set_bg_color(engine_handle, GFX_COLOR_HEX(0x000000));
-
-    g_obj_anim_eye = gfx_anim_create(engine_handle);
-    gfx_obj_align(g_obj_anim_eye, GFX_ALIGN_LEFT_MID, 10, 30);
-    gfx_anim_set_auto_mirror(g_obj_anim_eye, true);
-    gfx_obj_set_visible(g_obj_anim_eye, false);
-
-    g_obj_label_toast = gfx_label_create(engine_handle);
-    gfx_obj_align(g_obj_label_toast, GFX_ALIGN_TOP_MID, 0, 20);
-    gfx_obj_set_size(g_obj_label_toast, 200, 40);
-    gfx_label_set_text(g_obj_label_toast, Lang::Strings::INITIALIZING);
-    gfx_label_set_color(g_obj_label_toast, GFX_COLOR_HEX(0xFFFFFF));
-    gfx_label_set_text_align(g_obj_label_toast, GFX_TEXT_ALIGN_CENTER);
-    gfx_label_set_long_mode(g_obj_label_toast, GFX_LABEL_LONG_SCROLL);
-    gfx_label_set_scroll_speed(g_obj_label_toast, 20);
-    gfx_label_set_scroll_loop(g_obj_label_toast, true);
-    gfx_label_set_font(g_obj_label_toast, (gfx_font_t)&BUILTIN_TEXT_FONT);
-
-    g_obj_label_clock = gfx_label_create(engine_handle);
-    gfx_obj_align(g_obj_label_clock, GFX_ALIGN_TOP_MID, 0, 15);
-    gfx_obj_set_size(g_obj_label_clock, 200, 50);
-    gfx_label_set_text(g_obj_label_clock, "--:--");
-    gfx_label_set_color(g_obj_label_clock, GFX_COLOR_HEX(0xFFFFFF));
-    gfx_label_set_text_align(g_obj_label_clock, GFX_TEXT_ALIGN_CENTER);
-    gfx_label_set_font(g_obj_label_clock, (gfx_font_t)&BUILTIN_TEXT_FONT);
-
-    g_obj_anim_listen = gfx_anim_create(engine_handle);
-    gfx_obj_align(g_obj_anim_listen, GFX_ALIGN_TOP_MID, 0, 5);
-    gfx_anim_start(g_obj_anim_listen);
-    gfx_obj_set_visible(g_obj_anim_listen, false);
-
-    g_obj_img_status = gfx_img_create(engine_handle);
-    gfx_obj_align(g_obj_img_status, GFX_ALIGN_TOP_MID, -120, 18);
-
-    g_obj_anim_emerg_dlg = gfx_anim_create(engine_handle);
-    gfx_obj_align(g_obj_anim_emerg_dlg, GFX_ALIGN_CENTER, 0, 0);
-    gfx_obj_set_visible(g_obj_anim_emerg_dlg, false);
-
-    SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, display);
-}
-
-// ============================================================================
-// EmoteEngine Class Implementation
-// ============================================================================
-
-EmoteEngine::EmoteEngine(const esp_lcd_panel_handle_t panel, const esp_lcd_panel_io_handle_t panel_io,
-                         const int width, const int height, EmoteDisplay* const display)
-{
-    InitializeGraphics(panel, &engine_handle_, width, height);
-
-    if (display) {
-        gfx_emote_lock(engine_handle_);
-        SetupUI(engine_handle_, display);
-        gfx_emote_unlock(engine_handle_);
-    }
-}
-
-EmoteEngine::~EmoteEngine()
-{
-    if (engine_handle_) {
-        if (dialog_timer_) {
-            gfx_timer_delete(engine_handle_, dialog_timer_);
-            dialog_timer_ = nullptr;
-        }
-        gfx_emote_deinit(engine_handle_);
-        engine_handle_ = nullptr;
-    }
-}
-
-void EmoteEngine::SetEyes(const std::string &emoji_name, const bool repeat, const int fps, EmoteDisplay* const display)
-{
-    if (!engine_handle_) {
-        ESP_LOGE(TAG, "SetEyes: engine_handle_ is nullptr");
-        return;
-    }
-
-    if (!display) {
-        ESP_LOGE(TAG, "SetEyes: display is nullptr");
-        return;
-    }
-
-    const AssetData emoji_data = display->GetEmojiData(emoji_name);
-    if (emoji_data.data) {
-        DisplayLockGuard lock(display);
-        gfx_anim_set_src(g_obj_anim_eye, emoji_data.data, emoji_data.size);
-        gfx_anim_set_segment(g_obj_anim_eye, 0, 0xFFFF, fps, repeat);
-        gfx_obj_set_visible(g_obj_anim_eye, true);
-        gfx_anim_start(g_obj_anim_eye);
-    } else {
-        ESP_LOGW(TAG, "SetEyes: No emoji data found for %s", emoji_name.c_str());
-    }
-}
-
-void EmoteEngine::SetIcon(const std::string &icon_name, EmoteDisplay* const display)
-{
-    if (!engine_handle_) {
-        ESP_LOGE(TAG, "SetIcon: engine_handle_ is nullptr");
-        return;
-    }
-
-    if (!display) {
-        ESP_LOGE(TAG, "SetIcon: display is nullptr");
-        return;
-    }
-
-    const AssetData icon_data = display->GetIconData(icon_name);
-    if (icon_data.data) {
-        DisplayLockGuard lock(display);
-
-        std::memcpy(&g_icon_img_dsc.header, icon_data.data, sizeof(gfx_image_header_t));
-        g_icon_img_dsc.data = static_cast<const uint8_t*>(icon_data.data) + sizeof(gfx_image_header_t);
-        g_icon_img_dsc.data_size = icon_data.size - sizeof(gfx_image_header_t);
-
-        gfx_img_set_src(g_obj_img_status, &g_icon_img_dsc);
-    } else {
-        ESP_LOGW(TAG, "SetIcon: No icon data found for %s", icon_name.c_str());
-    }
-    g_current_icon_type = icon_name;
-}
-
-bool EmoteEngine::SetDialogAnim(const std::string &emoji_name, EmoteDisplay* const display)
-{
-    if (!engine_handle_) {
-        ESP_LOGE(TAG, "SetDialogAnim: engine_handle_ is nullptr");
-        return false;
-    }
-
-    if (!display) {
-        ESP_LOGE(TAG, "SetDialogAnim: display is nullptr");
-        return false;
-    }
-
-    const AssetData emoji_data = display->GetEmojiData(emoji_name);
-    if (!emoji_data.data) {
-        ESP_LOGW(TAG, "SetDialogAnim: No emoji data found for %s", emoji_name.c_str());
-        return false;
-    }
-
-    DisplayLockGuard lock(display);
-    gfx_anim_set_src(g_obj_anim_emerg_dlg, emoji_data.data, emoji_data.size);
-    gfx_anim_set_segment(g_obj_anim_emerg_dlg, 0, 0xFFFF, emoji_data.fps > 0 ? emoji_data.fps : 20, emoji_data.loop);
-    gfx_obj_set_visible(g_obj_anim_emerg_dlg, true);
-    gfx_anim_start(g_obj_anim_emerg_dlg);
-
-    // Hide eye animation when showing dialog
-    if (g_obj_anim_eye) {
-        gfx_obj_set_visible(g_obj_anim_eye, false);
-    }
-
-    // 更新当前 dialog emoji 名称
-    current_dialog_emoji_ = emoji_name;
-
-    return true;
-}
-
-void EmoteEngine::OnDialogTimer(void* user_ctx)
-{
-    if (!user_ctx) {
-        return;
-    }
-
-    EmoteDisplay* display = static_cast<EmoteDisplay*>(user_ctx);
-    if (display && display->GetEngine()) {
-        display->StopAnimDialog();
-    }
-}
-
-#if 1
-void EmoteEngine::OnFlush(const gfx_handle_t handle, const int x_start, const int y_start,
-                          const int x_end, const int y_end, const void* const color_data)
-{   
-    lv_display_t *disp = lv_display_get_default();
-    if (disp != nullptr) {
-        bool state = esp_lv_adapter_get_dummy_draw_enabled(disp);
-        if (state) {
-            esp_lv_adapter_dummy_draw_blit(
-                disp, x_start, y_start, x_end, y_end, color_data, true);
-            // gfx_emote_flush_ready(handle, true);
-        }
-    }
-    gfx_emote_flush_ready(handle, true);
-}
-#else
-void EmoteEngine::OnFlush(const gfx_handle_t handle, const int x_start, const int y_start,
-    const int x_end, const int y_end, const void* const color_data)
-{
-    auto* const panel = static_cast<esp_lcd_panel_handle_t>(gfx_emote_get_user_data(handle));
-    if (panel) {
-    esp_lcd_panel_draw_bitmap(panel, x_start, y_start, x_end, y_end, color_data);
-    }
-    gfx_emote_flush_ready(handle, true);
-}
-#endif
 // ============================================================================
 // EmoteDisplay Class Implementation
 // ============================================================================
 
 EmoteDisplay::EmoteDisplay(const esp_lcd_panel_handle_t panel, const esp_lcd_panel_io_handle_t panel_io,
-                           const int width, const int height)
+    const int width, const int height)
 {
-    InitializeEngine(panel, panel_io, width, height);
+    emote_handle_ = InitializeEmote(panel, width, height);
 }
 
-EmoteDisplay::~EmoteDisplay() = default;
+EmoteDisplay::~EmoteDisplay()
+{
+    if (emote_handle_) {
+        emote_deinit(emote_handle_);
+        emote_handle_ = nullptr;
+    }
+}
 
 void EmoteDisplay::SetEmotion(const char* const emotion)
 {
-    if (!emotion) {
-        ESP_LOGE(TAG, "SetEmotion: emotion is nullptr");
-        return;
-    }
-
     ESP_LOGI(TAG, "SetEmotion: %s", emotion);
-    if (!engine_) {
-        return;
+
+    if (emote_handle_ && emotion && strlen(emotion) > 0) {
+        emote_set_anim_emoji(emote_handle_, emotion);
     }
 
-    const AssetData emoji_data = GetEmojiData(emotion);
-    bool repeat = emoji_data.loop;
-    int fps = emoji_data.fps > 0 ? emoji_data.fps : 20;
+    static const std::unordered_map<std::string, int> emotion_to_action_map = {
+        {"happy",       VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"laughing",    VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"funny",       VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"loving",      VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"confident",   VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"delicious",   VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
+        {"thinking",    VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD},
 
-    if (std::strcmp(emotion, "idle") == 0 || std::strcmp(emotion, "neutral") == 0) {
-        repeat = false;
+        {"embarrassed", VOCAT_BASE_CMD_SET_ACTION_CAT_NUZZLE},
+
+        {"sad",         VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD_DECAY},
+        {"crying",      VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD_DECAY},
+        {"sleepy",      VOCAT_BASE_CMD_SET_ACTION_SHARK_HEAD_DECAY},
+
+        {"silly",       VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND},
+        {"confused",    VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND},
+
+        {"angry",       VOCAT_BASE_CMD_SET_ACTION_BEAT_SWING},
+
+        {"surprised",   VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND},
+        {"shocked",     VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND},
+
+        {"winking",     VOCAT_BASE_CMD_SET_ACTION_CAT_NUZZLE},
+
+        {"relaxed",     VOCAT_BASE_CMD_SET_ACTION_LOOK_AROUND},
+    };
+
+    if (emotion) {
+        auto it = emotion_to_action_map.find(emotion);
+        if (it != emotion_to_action_map.end()) {
+            vocat_base_control_set_action(it->second);
+        }
     }
-
-    DisplayLockGuard lock(this);
-    engine_->SetEyes(emotion, repeat, fps, this);
 }
+
 
 void EmoteDisplay::SetChatMessage(const char* const role, const char* const content)
 {
-    if (!engine_) {
-        return;
-    }
-
-    DisplayLockGuard lock(this);
-    if (content && strlen(content) > 0) {
-        gfx_label_set_text(g_obj_label_toast, content);
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, this);
+    ESP_LOGI(TAG, "SetChatMessage: %s, %s", role, content);
+    if (emote_handle_ && content && strlen(content) > 0) {
+        if ((std::strcmp(role, "system") == 0) && std::strstr(content, "xiaozhi.me")) {
+            size_t len = strlen(content);
+            char* new_content = new char[len + 1];
+            strcpy(new_content, content);
+            std::replace(new_content, new_content + len, static_cast<char>(0x0A), static_cast<char>(0x20));
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, new_content);
+            delete[] new_content;
+        } else {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SPEAK, content);
+        }
     }
 }
 
 void EmoteDisplay::SetStatus(const char* const status)
 {
-    if (!status) {
-        ESP_LOGE(TAG, "SetStatus: status is nullptr");
-        return;
-    }
-
-    if (!engine_) {
-        return;
-    }
-
-    DisplayLockGuard lock(this);
-
-    if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
-        SetUIDisplayMode(UIDisplayMode::SHOW_LISTENING, this);
-        engine_->SetEyes("happy", true, 20, this);
-        engine_->SetIcon(ICON_MIC, this);
-    } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIME, this);
-        engine_->SetIcon(ICON_BATTERY, this);
-    } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, this);
-        engine_->SetIcon(ICON_SPEAKER_ZZZ, this);
-    } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, this);
-        engine_->SetIcon(ICON_WIFI_FAILED, this);
-    }
-
-    if (std::strcmp(status, Lang::Strings::CONNECTING) != 0) {
-        gfx_label_set_text(g_obj_label_toast, status);
+    ESP_LOGI(TAG, "SetStatus: %s", status);
+    if (emote_handle_ && status && strlen(status) > 0) {
+        if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_LISTEN, NULL);
+        } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_IDLE, NULL);
+        } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SPEAK, NULL);
+        } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SET, NULL);
+        }
     }
 }
 
 void EmoteDisplay::ShowNotification(const char* notification, int duration_ms)
 {
-    if (!notification || !engine_) {
-        return;
-    }
     ESP_LOGI(TAG, "ShowNotification: %s", notification);
-
-    DisplayLockGuard lock(this);
-    gfx_label_set_text(g_obj_label_toast, notification);
-    SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, this);
+    if (emote_handle_ && notification && strlen(notification) > 0) {
+        emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, notification);
+    }
 }
 
 void EmoteDisplay::UpdateStatusBar(bool update_all)
 {
-    if (!engine_) {
+    ESP_LOGD(TAG, "UpdateStatusBar: %s", update_all ? "true" : "false");
+    if (!emote_handle_) {
         return;
-    }
-
-    // Only display time when battery icon is shown
-    DisplayLockGuard lock(this);
-    if (g_current_icon_type == ICON_BATTERY) {
-        time_t now;
-        struct tm timeinfo;
-        time(&now);
-
-        setenv("TZ", "GMT+0", 1);
-        tzset();
-        localtime_r(&now, &timeinfo);
-
-        char time_str[6];
-        snprintf(time_str, sizeof(time_str), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-
-        DisplayLockGuard lock(this);
-        gfx_label_set_text(g_obj_label_clock, time_str);
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIME, this);
     }
 }
 
 void EmoteDisplay::SetPowerSaveMode(bool on)
 {
-    if (!engine_) {
-        return;
-    }
-
-    DisplayLockGuard lock(this);
     ESP_LOGI(TAG, "SetPowerSaveMode: %s", on ? "ON" : "OFF");
-    if (on) {
-        gfx_anim_stop(g_obj_anim_eye);
-    } else {
-        gfx_anim_start(g_obj_anim_eye);
+    if (!emote_handle_) {
+        return;
     }
 }
 
@@ -579,244 +237,148 @@ void EmoteDisplay::SetPreviewImage(const void* image)
 {
     if (image) {
         ESP_LOGI(TAG, "SetPreviewImage: Preview image not supported, using default icon");
-        if (engine_) {
-        }
     }
 }
 
 void EmoteDisplay::SetTheme(Theme* const theme)
 {
     ESP_LOGI(TAG, "SetTheme: %p", theme);
-
-}
-void EmoteDisplay::AddEmojiData(const std::string &name, const void* const data, const size_t size,
-                                uint8_t fps, bool loop, bool lack)
-{
-    emoji_data_map_[name] = AssetData(data, size, fps, loop, lack);
-    // ESP_LOGI(TAG, "Added emoji data: %s, size: %d, fps: %d, loop: %s, lack: %s",
-    //          name.c_str(), size, fps, loop ? "true" : "false", lack ? "true" : "false");
-
-    DisplayLockGuard lock(this);
-    if (name == "happy") {
-        engine_->SetEyes("happy", loop, fps > 0 ? fps : 20, this);
-    }
-}
-
-void EmoteDisplay::AddIconData(const std::string &name, const void* const data, const size_t size)
-{
-    icon_data_map_[name] = AssetData(data, size);
-    ESP_LOGD(TAG, "Added icon data: %s, size: %d", name.c_str(), size);
-
-    DisplayLockGuard lock(this);
-    if (name == ICON_WIFI_FAILED) {
-        SetUIDisplayMode(UIDisplayMode::SHOW_TIPS, this);
-        engine_->SetIcon(ICON_WIFI_FAILED, this);
-    }
-}
-
-void EmoteDisplay::AddLayoutData(const std::string &name, const std::string &align_str,
-                                 const int x, const int y, const int width, const int height)
-{
-    const char align_enum = StringToGfxAlign(align_str);
-    ESP_LOGI(TAG, "layout: %-12s | %-20s(%d) | %4d, %4d | %4dx%-4d",
-             name.c_str(), align_str.c_str(), align_enum, x, y, width, height);
-
-    struct UIElement {
-        gfx_obj_t* obj;
-        const char* name;
-    };
-
-    const UIElement elements[] = {
-        {g_obj_anim_eye,     UI_ELEMENT_EYE_ANIM},
-        {g_obj_label_toast,  UI_ELEMENT_TOAST_LABEL},
-        {g_obj_label_clock,  UI_ELEMENT_CLOCK_LABEL},
-        {g_obj_anim_listen,  UI_ELEMENT_LISTEN_ANIM},
-        {g_obj_img_status,   UI_ELEMENT_STATUS_ICON},
-        {g_obj_anim_emerg_dlg, UI_ELEMENT_EMERG_DLG},
-    };
-
-    DisplayLockGuard lock(this);
-    for (const auto &element : elements) {
-        if (name == element.name && element.obj) {
-            gfx_obj_align(element.obj, align_enum, x, y);
-            if (width > 0 && height > 0) {
-                gfx_obj_set_size(element.obj, width, height);
-            }
-            return;
-        }
-    }
-
-    ESP_LOGW(TAG, "AddLayoutData: UI element '%s' not found", name.c_str());
-}
-
-void EmoteDisplay::AddTextFont(std::shared_ptr<LvglFont> text_font)
-{
-    if (!text_font) {
-        ESP_LOGW(TAG, "AddTextFont: text_font is nullptr");
-        return;
-    }
-
-    text_font_ = text_font;
-    ESP_LOGD(TAG, "AddTextFont: Text font added successfully");
-
-    DisplayLockGuard lock(this);
-    if (g_obj_label_toast && text_font_) {
-        gfx_label_set_font(g_obj_label_toast, const_cast<void*>(static_cast<const void*>(text_font_->font())));
-    }
-    if (g_obj_label_clock && text_font_) {
-        gfx_label_set_font(g_obj_label_clock, const_cast<void*>(static_cast<const void*>(text_font_->font())));
-    }
-}
-
-AssetData EmoteDisplay::GetEmojiData(const std::string &name) const
-{
-    const auto it = emoji_data_map_.find(name);
-    if (it != emoji_data_map_.cend()) {
-        return it->second;
-    }
-    return AssetData();
-}
-
-AssetData EmoteDisplay::GetIconData(const std::string &name) const
-{
-    const auto it = icon_data_map_.find(name);
-    if (it != icon_data_map_.cend()) {
-        return it->second;
-    }
-    return AssetData();
-}
-
-EmoteEngine* EmoteDisplay::GetEngine() const
-{
-    return engine_.get();
-}
-
-void* EmoteDisplay::GetEngineHandle() const
-{
-    return engine_ ? engine_->GetEngineHandle() : nullptr;
-}
-
-void EmoteDisplay::InitializeEngine(const esp_lcd_panel_handle_t panel, const esp_lcd_panel_io_handle_t panel_io,
-                                    const int width, const int height)
-{
-    engine_ = std::make_unique<EmoteEngine>(panel, panel_io, width, height, this);
 }
 
 bool EmoteDisplay::Lock(const int timeout_ms)
 {
-    if (engine_ && engine_->GetEngineHandle()) {
-        gfx_emote_lock(engine_->GetEngineHandle());
-        return true;
-    }
-    return false;
+    (void)timeout_ms;
+    return true;
 }
 
 void EmoteDisplay::Unlock()
 {
-    if (engine_ && engine_->GetEngineHandle()) {
-        gfx_emote_unlock(engine_->GetEngineHandle());
-    }
 }
 
 bool EmoteDisplay::StopAnimDialog()
 {
-    if (!engine_) {
-        return false;
+    ESP_LOGI(TAG, "StopAnimDialog");
+    if (emote_handle_) {
+        return emote_stop_anim_dialog(emote_handle_);
     }
-
-    void* engine_handle = engine_->GetEngineHandle();
-    if (!engine_handle) {
-        return false;
-    }
-
-    gfx_emote_lock(engine_handle);
-
-    // Stop and delete timer if exists
-    void* dialog_timer = engine_->GetDialogTimer();
-    if (dialog_timer) {
-        gfx_timer_delete(engine_handle, dialog_timer);
-        engine_->ClearDialogTimer();
-    }
-
-    if (g_obj_anim_emerg_dlg) {
-        gfx_obj_set_visible(g_obj_anim_emerg_dlg, false);
-    }
-
-    if (g_obj_anim_eye) {
-        gfx_obj_set_visible(g_obj_anim_eye, true);
-    }
-
-    // 标记位置：清除当前 dialog emoji 名称（手动停止或自动停止时）
-    engine_->ClearCurrentDialogEmoji();
-
-    gfx_emote_unlock(engine_handle);
-
-    return true;
+    return false;
 }
 
 bool EmoteDisplay::InsertAnimDialog(const char* emoji_name, uint32_t duration_ms)
 {
-    if (!emoji_name || !engine_) {
-        return false;
+    ESP_LOGI(TAG, "InsertAnimDialog: %s, %d", emoji_name, duration_ms);
+    if (emote_handle_ && emoji_name) {
+        return emote_insert_anim_dialog(emote_handle_, emoji_name, duration_ms);
     }
-
-    // 如果插入的 emoji 和当前显示的一样，不处理，直接返回
-    if (engine_->GetCurrentDialogEmoji() == emoji_name) {
-        ESP_LOGD(TAG, "InsertAnimDialog: Same emoji %s already displayed, skipping", emoji_name);
-        return true;
-    }
-
-    void* engine_handle = engine_->GetEngineHandle();
-    if (!engine_handle) {
-        return false;
-    }
-
-    // Stop existing timer if any
-    gfx_emote_lock(engine_handle);
-    void* dialog_timer = engine_->GetDialogTimer();
-    if (dialog_timer) {
-        gfx_timer_delete(engine_handle, dialog_timer);
-        engine_->ClearDialogTimer();
-    }
-    gfx_emote_unlock(engine_handle);
-
-    // Set dialog animation (this will lock internally)
-    if (!engine_->SetDialogAnim(emoji_name, this)) {
-        return false;
-    }
-
-    // Create timer for auto-stop
-    gfx_emote_lock(engine_handle);
-
-    void* timer = gfx_timer_create(engine_handle, EmoteEngine::OnDialogTimer, duration_ms, this);
-    if (!timer) {
-        ESP_LOGE(TAG, "Failed to create dialog timer");
-        gfx_emote_unlock(engine_handle);
-        StopAnimDialog();
-        return false;
-    }
-
-    gfx_timer_set_repeat_count(timer, 1);  // Execute only once
-    engine_->SetDialogTimer(timer);
-    gfx_emote_unlock(engine_handle);
-
-    return true;
+    return false;
 }
 
 void EmoteDisplay::RefreshAll()
 {
-    if (!engine_) {
-        ESP_LOGI(TAG, "Refresh all: engine_ is nullptr");
+    if (emote_handle_) {
+        emote_notify_all_refresh(emote_handle_);
+        return;
+    }
+}
+
+void EmoteDisplay::SetupBaseIconOverlay()
+{
+    if (!emote_handle_) {
         return;
     }
 
-    void* handle = engine_->GetEngineHandle();
-    if (!handle) {
-        ESP_LOGI(TAG, "Refresh all: handle is nullptr");
+    if (image_base_obj_) {
+        gfx_obj_set_visible(image_base_obj_, true);
         return;
     }
 
-    gfx_emote_refresh_all(handle);
+    icon_data_t* icon_data = nullptr;
+    esp_err_t ret = emote_get_icon_data_by_name(emote_handle_, "base_off", &icon_data);
+    if (ret != ESP_OK || !icon_data || !icon_data->data || icon_data->size <= sizeof(gfx_image_header_t)) {
+        ESP_LOGW(TAG, "base_off icon not ready, ret=%d", ret);
+        return;
+    }
+
+    image_base_obj_ = emote_create_obj_by_type(emote_handle_, EMOTE_OBJ_TYPE_IMAGE, "img_base");
+    if (!image_base_obj_) {
+        ESP_LOGE(TAG, "Failed to create img_base object");
+        return;
+    }
+
+    memcpy(&image_base_dsc_.header, icon_data->data, sizeof(gfx_image_header_t));
+    image_base_dsc_.data = (const uint8_t*)icon_data->data + sizeof(gfx_image_header_t);
+    image_base_dsc_.data_size = icon_data->size - sizeof(gfx_image_header_t);
+
+    if (gfx_img_set_src(image_base_obj_, &image_base_dsc_) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set img_base source");
+        return;
+    }
+
+    gfx_obj_set_visible(image_base_obj_, false);
+    gfx_obj_align(image_base_obj_, GFX_ALIGN_CENTER, 0, 0);
+    ESP_LOGI(TAG, "img_base overlay created");
+}
+
+void EmoteDisplay::InitCustomUI(esp_lcd_panel_io_handle_t panel_io, 
+                                   esp_lcd_panel_handle_t panel,
+                                   int width, int height, 
+                                   int offset_x, int offset_y, 
+                                   bool mirror_x, bool mirror_y, bool swap_xy,
+                                   EmoteDisplay *display)
+{
+    lv_init();
+
+#if CONFIG_SPIRAM
+    // LV image cache, currently only PNG is supported
+    size_t psram_size_mb = esp_psram_get_size() / 1024 / 1024;
+    if (psram_size_mb >= 8) {
+        lv_image_cache_resize(2 * 1024 * 1024, true);
+        ESP_LOGI(TAG, "Use 2MB of PSRAM for image cache");
+    } else if (psram_size_mb >= 2) {
+        lv_image_cache_resize(512 * 1024, true);
+        ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache");
+    }
+#endif
+
+    ESP_LOGI(TAG, "Initializing LVGL adapter, width:%d, height:%d", width, height);
+    esp_lv_adapter_config_t adapter_config = ESP_LV_ADAPTER_DEFAULT_CONFIG();
+    adapter_config.task_priority = 6;
+    adapter_config.task_core_id = 0;
+    adapter_config.tick_period_ms = 5;
+    adapter_config.task_min_delay_ms = 10;
+    adapter_config.task_max_delay_ms = 100;
+    adapter_config.stack_in_psram = false;
+    ESP_ERROR_CHECK(esp_lv_adapter_init(&adapter_config));
+
+    esp_lv_adapter_display_config_t display_config = ESP_LV_ADAPTER_DISPLAY_SPI_WITH_PSRAM_DEFAULT_CONFIG(
+                                                         panel,
+                                                         panel_io,
+                                                         static_cast<uint16_t>(width),
+                                                         static_cast<uint16_t>(height),
+                                                         ESP_LV_ADAPTER_ROTATE_0);
+    display_config.profile.use_psram = true;
+    display_config.profile.require_double_buffer = true;
+
+    lv_display_t *lv_display = esp_lv_adapter_register_display(&display_config);
+    if (lv_display == nullptr) {
+        ESP_LOGE(TAG, "Failed to add display");
+        return;
+    }
+
+    if (offset_x != 0 || offset_y != 0) {
+        lv_display_set_offset(lv_display, offset_x, offset_y);
+    }
+
+    ESP_LOGI(TAG, "Starting LVGL adapter");
+    esp_lv_adapter_set_dummy_draw(lv_display, true);
+    esp_lv_adapter_start();
+
+#if CONFIG_BOARD_TYPE_ESP_VOCAT
+    esp_lv_adapter_lock(-1);
+    /* Pass the display pointer directly to avoid Board::GetInstance() call */
+    ui_bridge_init(display);
+    esp_lv_adapter_unlock();
+#endif
 }
 
 } // namespace emote
