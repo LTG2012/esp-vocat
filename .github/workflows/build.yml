@@ -1,5 +1,8 @@
 name: Build Boards
 
+env:
+  PROJECT_DIR: examples/xiaozhi-esp32
+
 on:
   push:
     branches:
@@ -29,6 +32,7 @@ jobs:
 
       - id: list
         name: Get all variant list
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "all_variants=$(python scripts/release.py --list-boards --json)" >> $GITHUB_OUTPUT
 
@@ -36,6 +40,7 @@ jobs:
         name: Select variants based on changes
         env:
           ALL_VARIANTS: ${{ steps.list.outputs.all_variants }}
+          PROJECT_DIR: ${{ env.PROJECT_DIR }}
         run: |
           EVENT_NAME="${{ github.event_name }}"
 
@@ -56,16 +61,36 @@ jobs:
           NEED_ALL=0
           declare -A AFFECTED
           while IFS= read -r file; do
-            if [[ "$file" == main/* && "$file" != main/boards/* ]]; then
+            if [[ "$file" == "$PROJECT_DIR/CMakeLists.txt" ]]; then
               NEED_ALL=1
             fi
 
-            if [[ "$file" == main/boards/common/* ]]; then
+            if [[ "$file" == "$PROJECT_DIR/components/"* ]]; then
               NEED_ALL=1
             fi
 
-            if [[ "$file" == main/boards/* ]]; then
-              board=$(echo "$file" | cut -d '/' -f3)
+            if [[ "$file" == "$PROJECT_DIR/partitions/"* ]]; then
+              NEED_ALL=1
+            fi
+
+            if [[ "$file" == "$PROJECT_DIR/scripts/"* ]]; then
+              NEED_ALL=1
+            fi
+
+            if [[ "$file" == "$PROJECT_DIR/sdkconfig.defaults"* ]]; then
+              NEED_ALL=1
+            fi
+
+            if [[ "$file" == "$PROJECT_DIR/main/"* && "$file" != "$PROJECT_DIR/main/boards/"* ]]; then
+              NEED_ALL=1
+            fi
+
+            if [[ "$file" == "$PROJECT_DIR/main/boards/common/"* ]]; then
+              NEED_ALL=1
+            fi
+
+            if [[ "$file" == "$PROJECT_DIR/main/boards/"* ]]; then
+              board=$(echo "$file" | cut -d '/' -f5)
               AFFECTED[$board]=1
             fi
           done <<< "$CHANGED"
@@ -99,6 +124,7 @@ jobs:
 
       - name: Build current variant
         shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           source $IDF_PATH/export.sh
           python scripts/release.py ${{ matrix.board }} --name ${{ matrix.name }}
@@ -107,5 +133,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xiaozhi_${{ matrix.name }}_${{ github.sha }}.bin
-          path: build/merged-binary.bin
+          path: ${{ env.PROJECT_DIR }}/build/merged-binary.bin
           if-no-files-found: error
