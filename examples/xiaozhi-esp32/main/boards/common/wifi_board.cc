@@ -19,6 +19,8 @@
 
 static const char *TAG = "WifiBoard";
 
+constexpr int WIFI_CONNECT_TIMEOUT_MS = 15 * 1000;
+
 WifiBoard::WifiBoard() {
     Settings settings("wifi", true);
     wifi_config_mode_ = settings.GetInt("force_ap") == 1;
@@ -107,7 +109,7 @@ void WifiBoard::StartNetwork() {
     wifi_station.Start();
 
     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
-    if (!wifi_station.WaitForConnected(60 * 1000)) {
+    if (!wifi_station.WaitForConnected(WIFI_CONNECT_TIMEOUT_MS)) {
         wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
