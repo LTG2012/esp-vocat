@@ -275,7 +275,6 @@ void EspS3Cat::InitializePower()
 void EspS3Cat::InitializeCharge()
 {
     charge_ = new Charge(i2c_bus_, 0x55);
-    xTaskCreatePinnedToCore(Charge::TaskFunction, "batterydecTask", 3 * 1024, charge_, 6, NULL, 0);
 }
 
 void EspS3Cat::InitializeCst816sTouchPad()
@@ -376,6 +375,38 @@ esp_lcd_touch_handle_t EspS3Cat::GetTouchpad()
 Backlight* EspS3Cat::GetBacklight()
 {
     return backlight_;
+}
+
+bool EspS3Cat::GetBatteryStatus(BatteryStatus& status)
+{
+    if (charge_ == nullptr) {
+        return false;
+    }
+
+    ChargeStatus charge_status;
+    if (!charge_->GetBatteryStatus(charge_status)) {
+        return false;
+    }
+
+    status.level = charge_status.level;
+    status.voltage_mv = charge_status.voltage_mv;
+    status.current_ma = charge_status.current_ma;
+    status.charging = status.current_ma > 0;
+    status.discharging = status.current_ma < 0;
+    return true;
+}
+
+bool EspS3Cat::GetBatteryLevel(int& level, bool& charging, bool& discharging)
+{
+    BatteryStatus status;
+    if (!GetBatteryStatus(status)) {
+        return false;
+    }
+
+    level = status.level;
+    charging = status.charging;
+    discharging = status.discharging;
+    return true;
 }
 
 void EspS3Cat::SetAfeDataProcessCallback(std::function<void(const int16_t* audio_data, size_t total_bytes)> callback)

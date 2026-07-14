@@ -20,6 +20,8 @@ public:
     virtual AudioCodec* GetAudioCodec() override;
     virtual Display* GetDisplay() override;
     virtual Backlight* GetBacklight() override;
+    virtual bool GetBatteryStatus(BatteryStatus& status) override;
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override;
     esp_lcd_touch_handle_t GetTouchpad();
 
     virtual void SetAfeDataProcessCallback(std::function<void(const int16_t* audio_data, size_t total_bytes)> callback) override;

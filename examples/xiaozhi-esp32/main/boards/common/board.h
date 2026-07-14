@@ -17,6 +17,14 @@
 void* create_board();
 class AudioCodec;
 class Display;
+struct BatteryStatus {
+    int level = 0;
+    int voltage_mv = 0;
+    int current_ma = 0;
+    bool charging = false;
+    bool discharging = false;
+};
+
 class Board {
 private:
     Board(const Board&) = delete; // 禁用拷贝构造函数
@@ -47,6 +55,7 @@ public:
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;
+    virtual bool GetBatteryStatus(BatteryStatus& status);
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
     virtual std::string GetSystemInfoJson();
     virtual void SetPowerSaveMode(bool enabled) = 0;

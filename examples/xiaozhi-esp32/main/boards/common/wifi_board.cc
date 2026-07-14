@@ -228,14 +228,26 @@ std::string WifiBoard::GetDeviceStatusJson() {
     cJSON_AddItemToObject(root, "screen", screen);
 
     // Battery
-    int battery_level = 0;
-    bool charging = false;
-    bool discharging = false;
-    if (board.GetBatteryLevel(battery_level, charging, discharging)) {
+    BatteryStatus battery_status;
+    if (board.GetBatteryStatus(battery_status)) {
         cJSON* battery = cJSON_CreateObject();
-        cJSON_AddNumberToObject(battery, "level", battery_level);
-        cJSON_AddBoolToObject(battery, "charging", charging);
+        cJSON_AddNumberToObject(battery, "level", battery_status.level);
+        cJSON_AddNumberToObject(battery, "voltage_mv", battery_status.voltage_mv);
+        cJSON_AddNumberToObject(battery, "current_ma", battery_status.current_ma);
+        cJSON_AddBoolToObject(battery, "charging", battery_status.charging);
+        cJSON_AddBoolToObject(battery, "discharging", battery_status.discharging);
         cJSON_AddItemToObject(root, "battery", battery);
+    } else {
+        int battery_level = 0;
+        bool charging = false;
+        bool discharging = false;
+        if (board.GetBatteryLevel(battery_level, charging, discharging)) {
+            cJSON* battery = cJSON_CreateObject();
+            cJSON_AddNumberToObject(battery, "level", battery_level);
+            cJSON_AddBoolToObject(battery, "charging", charging);
+            cJSON_AddBoolToObject(battery, "discharging", discharging);
+            cJSON_AddItemToObject(root, "battery", battery);
+        }
     }
 
     // Network

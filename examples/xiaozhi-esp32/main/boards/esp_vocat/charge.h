@@ -3,18 +3,17 @@
 
 #include "i2c_device.h"
 #include <driver/i2c_master.h>
-#include <driver/temperature_sensor.h>
+
+struct ChargeStatus {
+    int level = 0;
+    int voltage_mv = 0;
+    int current_ma = 0;
+};
 
 class Charge : public I2cDevice {
 public:
     Charge(i2c_master_bus_handle_t i2c_bus, uint8_t addr);
-    ~Charge();
-
-    void Printcharge();
-    static void TaskFunction(void *pvParameters);
-
-private:
-    uint8_t* read_buffer_ = nullptr;
+    bool GetBatteryStatus(ChargeStatus& status);
 };
 
 #endif // CHARGE_H
