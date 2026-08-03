@@ -90,6 +90,40 @@ void DevTools::Initialize(EspS3Cat* board)
         return true;
     });
 
+    // Echo base relative angle control
+    std::snprintf(buffer, sizeof(buffer), "%s",
+                  is_zh ?
+                  "按相对中心角度控制底座。direction 使用 left/right/center，angle 为 0-90 度。\n"
+                  "例如 direction=left、angle=45 表示转到中心左侧 45 度；direction=right、angle=30 表示转到中心右侧 30 度。"
+                  :
+                  "Set the echo base target angle relative to center. Use direction left/right/center and angle 0-90 degrees.\n"
+                  "For example, left + 45 means 45 degrees left of center, and right + 30 means 30 degrees right of center.");
+    mcp_server.AddTool("self.echo_base.set_angle", buffer,
+    PropertyList({
+        Property("direction", kPropertyTypeString),
+        Property("angle", kPropertyTypeInteger, 0, 0, 90),
+    }), [](const PropertyList & properties) -> ReturnValue {
+        const std::string &direction = properties["direction"].value<std::string>();
+        const int angle = properties["angle"].value<int>();
+        int target_angle = 90;
+        int relative_angle = 0;
+
+        if (direction == "left" || direction == "向左" || direction == "左") {
+            relative_angle = -angle;
+            target_angle = 90 + relative_angle;
+        } else if (direction == "right" || direction == "向右" || direction == "右") {
+            relative_angle = angle;
+            target_angle = 90 + relative_angle;
+        } else if (direction != "center" && direction != "middle" && direction != "中心") {
+            ESP_LOGE(TAG, "Unknown base angle direction: %s", direction.c_str());
+            return false;
+        }
+
+        ESP_LOGI(TAG, "Set base angle: direction=%s, relative=%d, target=%d", direction.c_str(),
+                 relative_angle, target_angle);
+        return vocat_base_control_set_angle(target_angle) == ESP_OK;
+    });
+
     // Audio analysis mode control
     std::snprintf(buffer, sizeof(buffer), "%s",
                   is_zh ?

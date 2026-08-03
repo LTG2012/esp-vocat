@@ -158,19 +158,23 @@ static void touch_slider_callback(touch_slider_handle_t handle, touch_slider_eve
         break;
 
     case TOUCH_SLIDER_EVENT_RIGHT_SWIPE:
-        if (!is_sliding_detected) {
-            is_sliding_detected = true;
-            ESP_LOGI(TAG, "Swipe detected, taking control from buttons");
-        }
-        ESP_LOGI(TAG, "Right swipe");
-        break;
-
     case TOUCH_SLIDER_EVENT_LEFT_SWIPE:
         if (!is_sliding_detected) {
             is_sliding_detected = true;
             ESP_LOGI(TAG, "Swipe detected, taking control from buttons");
+            if (event == TOUCH_SLIDER_EVENT_RIGHT_SWIPE) {
+                ESP_LOGI(TAG, "Right swipe");
+            } else {
+                ESP_LOGI(TAG, "Left swipe");
+            }
+
+            auto &app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.Schedule([]() {
+                    Application::GetInstance().WakeWordInvoke("我在摸你猫头");
+                });
+            }
         }
-        ESP_LOGI(TAG, "Left swipe");
         break;
 
     case TOUCH_SLIDER_EVENT_RELEASE:
