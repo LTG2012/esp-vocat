@@ -5,6 +5,7 @@
 #include "mcp_server.h"
 #include "board.h"
 #include "assets/lang_config.h"
+#include "display/emote_display.h"
 #include <esp_log.h>
 #include <cstdio>
 #include <cstring>
@@ -90,6 +91,28 @@ void DevTools::Initialize(EspS3Cat* board)
         return true;
     });
 
+    // Emotion-triggered base action switch
+    std::snprintf(buffer, sizeof(buffer), "%s",
+                  is_zh ?
+                  "控制表情触发底座动作的开关，默认关闭。用户说‘打开表情摇头开关’时 enabled=true；说‘关闭表情摇头开关’时 enabled=false。"
+                  :
+                  "Control the switch for emotion-triggered base actions; disabled by default. Set enabled=true for ‘open emotion head-shake switch’ and false for ‘close emotion head-shake switch’.");
+    mcp_server.AddTool("self.echo_base.set_emotion_shake", buffer,
+    PropertyList({
+        Property("enabled", kPropertyTypeBoolean),
+    }), [board](const PropertyList & properties) -> ReturnValue {
+        const bool enabled = properties["enabled"].value<bool>();
+        Display* display = board->GetDisplay();
+        emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+        if (emote_display == nullptr) {
+            ESP_LOGE(TAG, "Emote display is not available");
+            return false;
+        }
+
+        emote_display->SetEmotionShakeEnabled(enabled);
+        return true;
+    });
+
     // Echo base relative angle control
     std::snprintf(buffer, sizeof(buffer), "%s",
                   is_zh ?
@@ -129,12 +152,14 @@ void DevTools::Initialize(EspS3Cat* board)
                   is_zh ?
                   "设置音频分析模式。可选模式:\n"
                   "beat_detection: 鼓点检测模式\n"
-                  "doa_follow: 声源方向跟随模式\n"
+                  "doa_follow: 声源方向跟随模式；退出 DOA 测试环境时使用\n"
+                  "doa_test: DOA 测试环境，只显示当前角度，不控制底座；用户说进入 DOA 测试环境时使用\n"
                   "disabled: 关闭音频分析"
                   :
                   "Set audio analysis mode. Available modes:\n"
                   "beat_detection: beat detection mode\n"
-                  "doa_follow: DOA follow mode\n"
+                  "doa_follow: DOA follow mode; use this to exit DOA test mode\n"
+                  "doa_test: DOA test mode; display the current angle only and do not control the base\n"
                   "disabled: disable audio analysis");
     mcp_server.AddTool("self.echo_base.set_audio_mode", buffer,
     PropertyList({
@@ -147,6 +172,8 @@ void DevTools::Initialize(EspS3Cat* board)
             analysis_mode = AudioAnalysisMode::BEAT_DETECTION;
         } else if (mode == "doa_follow") {
             analysis_mode = AudioAnalysisMode::DOA_FOLLOW;
+        } else if (mode == "doa_test") {
+            analysis_mode = AudioAnalysisMode::DOA_TEST;
         } else if (mode == "disabled")
         {
             analysis_mode = AudioAnalysisMode::DISABLED;

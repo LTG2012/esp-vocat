@@ -10,6 +10,7 @@
 enum class AudioAnalysisMode {
     BEAT_DETECTION,  // 鼓点检测，跟着音乐跳舞
     DOA_FOLLOW,      // DOA 人声音跟随模式
+    DOA_TEST,        // DOA 测试模式，只显示角度，不控制底座
     DISABLED         // 禁用
 };
 

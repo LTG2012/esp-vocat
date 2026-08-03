@@ -1,6 +1,7 @@
 #pragma once
 
 #include "display.h"
+#include <atomic>
 #include <memory>
 #include <string>
 #include <esp_lcd_panel_io.h>
@@ -26,6 +27,13 @@ public:
     // Anim dialog methods
     bool StopAnimDialog();
     bool InsertAnimDialog(const char* emoji_name, uint32_t duration_ms);
+
+    // DOA test mode display
+    void SetDoaTestMode(bool enabled);
+    void SetDoaTestAngle(float angle);
+
+    // Emotion-triggered base action switch
+    void SetEmotionShakeEnabled(bool enabled);
 
     void RefreshAll();
     void SetupBaseIconOverlay();
@@ -62,6 +70,8 @@ private:
     virtual void Unlock() override;
 
     emote_handle_t emote_handle_ = nullptr;
+    std::atomic_bool doa_test_mode_{false};
+    std::atomic_bool emotion_shake_enabled_{false};
     gfx_obj_t* image_base_obj_ = nullptr;
     gfx_image_dsc_t image_base_dsc_ = {};
 

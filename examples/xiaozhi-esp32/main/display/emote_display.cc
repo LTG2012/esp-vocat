@@ -2,6 +2,7 @@
 
 // Standard C++ headers
 #include <cstring>
+#include <cstdio>
 #include <memory>
 #include <unordered_map>
 #include <tuple>
@@ -133,10 +134,18 @@ EmoteDisplay::~EmoteDisplay()
 
 void EmoteDisplay::SetEmotion(const char* const emotion)
 {
+    if (doa_test_mode_.load()) {
+        return;
+    }
+
     ESP_LOGI(TAG, "SetEmotion: %s", emotion);
 
     if (emote_handle_ && emotion && strlen(emotion) > 0) {
         emote_set_anim_emoji(emote_handle_, emotion);
+    }
+
+    if (!emotion_shake_enabled_.load()) {
+        return;
     }
 
     static const std::unordered_map<std::string, int> emotion_to_action_map = {
@@ -178,6 +187,10 @@ void EmoteDisplay::SetEmotion(const char* const emotion)
 
 void EmoteDisplay::SetChatMessage(const char* const role, const char* const content)
 {
+    if (doa_test_mode_.load()) {
+        return;
+    }
+
     ESP_LOGI(TAG, "SetChatMessage: %s, %s", role, content);
     if (emote_handle_ && content && strlen(content) > 0) {
         if ((std::strcmp(role, "system") == 0) && std::strstr(content, "xiaozhi.me")) {
@@ -195,6 +208,10 @@ void EmoteDisplay::SetChatMessage(const char* const role, const char* const cont
 
 void EmoteDisplay::SetStatus(const char* const status)
 {
+    if (doa_test_mode_.load()) {
+        return;
+    }
+
     ESP_LOGI(TAG, "SetStatus: %s", status);
     if (emote_handle_ && status && strlen(status) > 0) {
         if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
@@ -211,6 +228,10 @@ void EmoteDisplay::SetStatus(const char* const status)
 
 void EmoteDisplay::ShowNotification(const char* notification, int duration_ms)
 {
+    if (doa_test_mode_.load()) {
+        return;
+    }
+
     ESP_LOGI(TAG, "ShowNotification: %s", notification);
     if (emote_handle_ && notification && strlen(notification) > 0) {
         emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, notification);
@@ -271,6 +292,38 @@ bool EmoteDisplay::InsertAnimDialog(const char* emoji_name, uint32_t duration_ms
         return emote_insert_anim_dialog(emote_handle_, emoji_name, duration_ms);
     }
     return false;
+}
+
+void EmoteDisplay::SetDoaTestMode(bool enabled)
+{
+    bool was_enabled = doa_test_mode_.exchange(enabled);
+    StopAnimDialog();
+
+    if (enabled) {
+        if (emote_handle_) {
+            emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, "DOA: waiting...");
+        }
+    } else if (was_enabled) {
+        SetStatus(Lang::Strings::STANDBY);
+        SetEmotion("neutral");
+    }
+}
+
+void EmoteDisplay::SetDoaTestAngle(float angle)
+{
+    if (!doa_test_mode_.load() || !emote_handle_) {
+        return;
+    }
+
+    char message[32];
+    std::snprintf(message, sizeof(message), "DOA: %.1f deg", angle);
+    emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SYS, message);
+}
+
+void EmoteDisplay::SetEmotionShakeEnabled(bool enabled)
+{
+    emotion_shake_enabled_.store(enabled);
+    ESP_LOGI(TAG, "Emotion-triggered base actions: %s", enabled ? "enabled" : "disabled");
 }
 
 void EmoteDisplay::RefreshAll()

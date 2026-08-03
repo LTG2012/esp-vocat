@@ -48,7 +48,7 @@ void AudioAnalysis::Initialize()
     // Initialize audio DOA
     audio_doa_app_config_t doa_app_cfg = {
         .audio_doa_result_callback = DoaTrackerResultCallback,
-        .audio_doa_result_callback_ctx = NULL,
+        .audio_doa_result_callback_ctx = this,
     };
     ret = audio_doa_app_create(&doa_app_handle_, &doa_app_cfg);
     if (ret != ESP_OK) {
@@ -81,8 +81,23 @@ void AudioAnalysis::BeatDetectionResultCallback(beat_detection_result_t result, 
 
 void AudioAnalysis::DoaTrackerResultCallback(float angle, void *ctx)
 {
+    AudioAnalysis* self = static_cast<AudioAnalysis*>(ctx);
+    if (self == nullptr) {
+        return;
+    }
+
     ESP_LOGI(TAG, "Estimated direction: %.2f", angle);
-    vocat_base_control_set_angle(angle);
+    if (self->mode_ == AudioAnalysisMode::DOA_FOLLOW) {
+        vocat_base_control_set_angle(angle);
+    } else if (self->mode_ == AudioAnalysisMode::DOA_TEST) {
+        Display* display = Board::GetInstance().GetDisplay();
+        if (display != nullptr) {
+            emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+            if (emote_display != nullptr) {
+                emote_display->SetDoaTestAngle(angle);
+            }
+        }
+    }
 }
 
 void AudioAnalysis::SetAfeDataProcessCallback()
@@ -133,7 +148,7 @@ void AudioAnalysis::SetMode(AudioAnalysisMode mode)
     if (display != nullptr) {
         emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
         if (emote_display != nullptr) {
-            emote_display->StopAnimDialog();
+            emote_display->SetDoaTestMode(mode == AudioAnalysisMode::DOA_TEST);
         }
     }
     ESP_LOGI(TAG, "Audio analysis mode set to: %d", static_cast<int>(mode));
@@ -161,7 +176,8 @@ void AudioAnalysis::OnAudioDataProcessed(const int16_t* audio_data, size_t bytes
         }
         break;
 
-    case AudioAnalysisMode::DOA_FOLLOW: {
+    case AudioAnalysisMode::DOA_FOLLOW:
+    case AudioAnalysisMode::DOA_TEST: {
         auto &app = Application::GetInstance();
         if (app.GetDeviceState() == kDeviceStateListening || app.GetDeviceState() == kDeviceStateIdle) {
             // Feed to audio DOA
