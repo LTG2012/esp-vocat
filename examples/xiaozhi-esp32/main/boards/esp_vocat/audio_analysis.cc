@@ -5,6 +5,7 @@
 #include "audio_codec.h"
 #include "display/emote_display.h"
 #include "device_state.h"
+#include "device_state_event.h"
 #include <esp_log.h>
 #include <cstring>
 #include <cmath>
@@ -21,6 +22,19 @@ static constexpr float kDoaCenterAngle = 90.0f;
 static constexpr float kDoaDeadbandAngle = 5.0f;
 static constexpr float kDoaCorrectionGain = 0.8f;
 static constexpr int kDoaMaxCorrectionAngle = 30;
+
+static bool IsDoaMode(AudioAnalysisMode mode)
+{
+    return mode == AudioAnalysisMode::DOA_FOLLOW || mode == AudioAnalysisMode::DOA_TEST;
+}
+
+static bool ShouldRunDoa(AudioAnalysisMode mode, DeviceState state)
+{
+    if (mode == AudioAnalysisMode::DOA_TEST) {
+        return true;
+    }
+    return mode == AudioAnalysisMode::DOA_FOLLOW && state == kDeviceStateListening;
+}
 
 AudioAnalysis::AudioAnalysis() : beat_detection_handle_(nullptr), doa_app_handle_(nullptr)
 {
@@ -61,6 +75,14 @@ void AudioAnalysis::Initialize()
         ESP_LOGE(TAG, "Failed to create audio DOA app");
     } else {
         ESP_LOGI(TAG, "Audio DOA app created successfully");
+        audio_doa_app_set_vad_detect(doa_app_handle_, false);
+        audio_doa_app_stop(doa_app_handle_);
+        doa_running_ = false;
+        DeviceStateEventManager::GetInstance().RegisterStateChangeCallback(
+            [this](DeviceState previous_state, DeviceState current_state) {
+                OnDeviceStateChanged(previous_state, current_state);
+            });
+        OnDeviceStateChanged(kDeviceStateUnknown, Application::GetInstance().GetDeviceState());
     }
 }
 
@@ -89,6 +111,15 @@ void AudioAnalysis::DoaTrackerResultCallback(float angle, void *ctx)
 {
     AudioAnalysis* self = static_cast<AudioAnalysis*>(ctx);
     if (self == nullptr) {
+        return;
+    }
+
+    if (!IsDoaMode(self->mode_)) {
+        return;
+    }
+
+    if (self->mode_ == AudioAnalysisMode::DOA_FOLLOW &&
+        Application::GetInstance().GetDeviceState() != kDeviceStateListening) {
         return;
     }
 
@@ -163,6 +194,8 @@ void AudioAnalysis::OnVadStateChange(bool speaking)
 void AudioAnalysis::SetMode(AudioAnalysisMode mode)
 {
     mode_ = mode;
+    OnDeviceStateChanged(Application::GetInstance().GetDeviceState(),
+                         Application::GetInstance().GetDeviceState());
 
     // Stop any existing animation dialog when mode changes
     Display* display = Board::GetInstance().GetDisplay();
@@ -173,6 +206,38 @@ void AudioAnalysis::SetMode(AudioAnalysisMode mode)
         }
     }
     ESP_LOGI(TAG, "Audio analysis mode set to: %d", static_cast<int>(mode));
+}
+
+void AudioAnalysis::OnDeviceStateChanged(DeviceState previous_state, DeviceState current_state)
+{
+    (void)previous_state;
+    if (doa_app_handle_ == nullptr) {
+        return;
+    }
+
+    const bool should_run = ShouldRunDoa(mode_, current_state);
+    if (should_run == doa_running_) {
+        return;
+    }
+
+    if (should_run) {
+        const esp_err_t ret = audio_doa_app_start(doa_app_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start audio DOA: %s", esp_err_to_name(ret));
+            return;
+        }
+        doa_running_ = true;
+        ESP_LOGI(TAG, "Audio DOA started for state %d", static_cast<int>(current_state));
+    } else {
+        audio_doa_app_set_vad_detect(doa_app_handle_, false);
+        const esp_err_t ret = audio_doa_app_stop(doa_app_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop audio DOA: %s", esp_err_to_name(ret));
+            return;
+        }
+        doa_running_ = false;
+        ESP_LOGI(TAG, "Audio DOA stopped for state %d", static_cast<int>(current_state));
+    }
 }
 
 void AudioAnalysis::OnAudioDataProcessed(const int16_t* audio_data, size_t bytes_per_channel, size_t channels)
@@ -200,7 +265,9 @@ void AudioAnalysis::OnAudioDataProcessed(const int16_t* audio_data, size_t bytes
     case AudioAnalysisMode::DOA_FOLLOW:
     case AudioAnalysisMode::DOA_TEST: {
         auto &app = Application::GetInstance();
-        if (app.GetDeviceState() == kDeviceStateListening || app.GetDeviceState() == kDeviceStateIdle) {
+        const bool conversation_active = app.GetDeviceState() == kDeviceStateListening;
+        const bool explicit_doa_test = mode_ == AudioAnalysisMode::DOA_TEST;
+        if (conversation_active || explicit_doa_test) {
             // Feed to audio DOA
             if (doa_app_handle_ != nullptr) {
                 audio_doa_app_data_write(doa_app_handle_, (uint8_t *)audio_data, bytes_per_channel * channels);
