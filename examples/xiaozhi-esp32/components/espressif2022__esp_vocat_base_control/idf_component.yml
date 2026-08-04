@@ -1,0 +1,8 @@
+description: esp_vocat Base Control Component - UART-based communication for esp_vocat
+  base device control
+license: Apache-2.0
+repository: git://github.com/espressif2022/esp_vocat_base_control.git
+repository_info:
+  commit_sha: 226842cd7b0b75d070d0392e27c00e24cc96774f
+  path: .
+version: 1.0.1

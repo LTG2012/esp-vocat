@@ -7,6 +7,7 @@
 #include "device_state.h"
 #include <esp_log.h>
 #include <cstring>
+#include <cmath>
 #include "vocat_base_control.h"
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -15,6 +16,11 @@
 #include "ui_bridge.h"
 
 #define TAG "AudioAnalysis"
+
+static constexpr float kDoaCenterAngle = 90.0f;
+static constexpr float kDoaDeadbandAngle = 10.0f;
+static constexpr float kDoaCorrectionGain = 0.8f;
+static constexpr int kDoaMaxCorrectionAngle = 30;
 
 AudioAnalysis::AudioAnalysis() : beat_detection_handle_(nullptr), doa_app_handle_(nullptr)
 {
@@ -88,7 +94,22 @@ void AudioAnalysis::DoaTrackerResultCallback(float angle, void *ctx)
 
     ESP_LOGI(TAG, "Estimated direction: %.2f", angle);
     if (self->mode_ == AudioAnalysisMode::DOA_FOLLOW) {
-        vocat_base_control_set_angle(angle);
+        const float error = angle - kDoaCenterAngle;
+        if (std::fabs(error) <= kDoaDeadbandAngle) {
+            ESP_LOGI(TAG, "DOA within center deadband: error=%.2f", error);
+            return;
+        }
+
+        int correction = static_cast<int>(std::lround(error * kDoaCorrectionGain));
+        if (correction > kDoaMaxCorrectionAngle) {
+            correction = kDoaMaxCorrectionAngle;
+        } else if (correction < -kDoaMaxCorrectionAngle) {
+            correction = -kDoaMaxCorrectionAngle;
+        }
+
+        ESP_LOGI(TAG, "DOA relative correction: angle=%.2f error=%.2f delta=%d",
+                 angle, error, correction);
+        vocat_base_control_adjust_angle(correction);
     } else if (self->mode_ == AudioAnalysisMode::DOA_TEST) {
         Display* display = Board::GetInstance().GetDisplay();
         if (display != nullptr) {
