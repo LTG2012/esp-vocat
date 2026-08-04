@@ -18,7 +18,7 @@
 #define TAG "AudioAnalysis"
 
 static constexpr float kDoaCenterAngle = 90.0f;
-static constexpr float kDoaDeadbandAngle = 10.0f;
+static constexpr float kDoaDeadbandAngle = 5.0f;
 static constexpr float kDoaCorrectionGain = 0.8f;
 static constexpr int kDoaMaxCorrectionAngle = 30;
 
