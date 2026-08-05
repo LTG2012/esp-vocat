@@ -20,6 +20,47 @@ void DevTools::Initialize(EspS3Cat* board)
     char buffer[1024];
     const bool is_zh = (std::strncmp(Lang::CODE, "zh", 2) == 0);
 
+    std::snprintf(buffer, sizeof(buffer), "%s",
+                  is_zh ?
+                  "查询设备实时电池信息。用户询问“当前电量”“还剩多少电”“是否在充电”“充电电流多少”“电池电压”等问题时，必须调用此工具。"
+                  :
+                  "Get real-time battery information. Use this tool whenever the user asks about battery level, charging state, charge current, or battery voltage.");
+    mcp_server.AddTool("self.battery.get_status", buffer, PropertyList(), [board, is_zh](const PropertyList& properties) -> ReturnValue {
+        BatteryStatus status;
+        if (!board->GetBatteryStatus(status)) {
+            return is_zh ? "暂时无法读取电池信息。" : "Battery information is currently unavailable.";
+        }
+
+        char response[160];
+        const int current_ma = status.current_ma >= 0 ? status.current_ma : -status.current_ma;
+        if (status.charging) {
+            std::snprintf(response, sizeof(response), is_zh ?
+                          "当前电量%d%%，电池电压%d毫伏，正在充电，充电电流%d毫安。" :
+                          "Battery level is %d%%, voltage is %d mV, charging at %d mA.",
+                          status.level, status.voltage_mv, current_ma);
+        } else if (status.discharging) {
+            std::snprintf(response, sizeof(response), is_zh ?
+                          "当前电量%d%%，电池电压%d毫伏，正在放电，放电电流%d毫安。" :
+                          "Battery level is %d%%, voltage is %d mV, discharging at %d mA.",
+                          status.level, status.voltage_mv, current_ma);
+        } else if (status.level >= 100) {
+            std::snprintf(response, sizeof(response), is_zh ?
+                          "当前电量已满，电池电压%d毫伏，当前电流%d毫安。" :
+                          "Battery is full, voltage is %d mV, current is %d mA.",
+                          status.voltage_mv, current_ma);
+        } else {
+            std::snprintf(response, sizeof(response), is_zh ?
+                          "当前电量%d%%，电池电压%d毫伏，当前未充电，电流%d毫安。" :
+                          "Battery level is %d%%, voltage is %d mV, not charging, current is %d mA.",
+                          status.level, status.voltage_mv, current_ma);
+        }
+
+        if (auto* display = board->GetDisplay(); display != nullptr) {
+            display->ShowNotification(response, 5000);
+        }
+        return std::string(response);
+    });
+
     // Echo base action control
     std::snprintf(buffer, sizeof(buffer), "%s",
                   is_zh ?

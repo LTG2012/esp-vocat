@@ -241,9 +241,19 @@ void EmoteDisplay::ShowNotification(const char* notification, int duration_ms)
 void EmoteDisplay::UpdateStatusBar(bool update_all)
 {
     ESP_LOGD(TAG, "UpdateStatusBar: %s", update_all ? "true" : "false");
-    if (!emote_handle_) {
+    if (doa_test_mode_.load() || !emote_handle_) {
         return;
     }
+
+    BatteryStatus battery_status;
+    if (!Board::GetInstance().GetBatteryStatus(battery_status)) {
+        return;
+    }
+
+    const int level = battery_status.level < 0 ? 0 : (battery_status.level > 100 ? 100 : battery_status.level);
+    char battery_event[16];
+    std::snprintf(battery_event, sizeof(battery_event), "%d,%d", battery_status.charging ? 1 : 0, level);
+    emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_BAT, battery_event);
 }
 
 void EmoteDisplay::SetPowerSaveMode(bool on)
