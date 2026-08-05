@@ -22,7 +22,7 @@
 
 #define AUDIO_DOA_DATA_BUS_SIZE 2048
 
-#define DOA_WINDOW_SIZE 7
+#define DOA_WINDOW_SIZE 5
 #define GAUSSIAN_SIGMA  1.0
 
 #define START_BIT (1 << 0)

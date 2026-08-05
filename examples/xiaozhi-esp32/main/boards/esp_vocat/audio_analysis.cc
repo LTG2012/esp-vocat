@@ -21,7 +21,7 @@
 static constexpr float kDoaCenterAngle = 90.0f;
 static constexpr float kDoaDeadbandAngle = 5.0f;
 static constexpr float kDoaCorrectionGain = 0.8f;
-static constexpr int kDoaMaxCorrectionAngle = 30;
+static constexpr int kDoaMaxCorrectionAngle = 60;
 
 static bool IsDoaMode(AudioAnalysisMode mode)
 {
