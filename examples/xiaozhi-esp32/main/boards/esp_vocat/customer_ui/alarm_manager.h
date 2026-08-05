@@ -23,6 +23,8 @@ LV_FONT_DECLARE(lv_font_montserrat_32);
 LV_FONT_DECLARE(lv_font_montserrat_40);
 LV_FONT_DECLARE(ui_font_Heiti18);
 LV_FONT_DECLARE(ui_font_Heiti24);
+LV_FONT_DECLARE(ui_font_magnetic_monitor_18);
+LV_FONT_DECLARE(ui_font_magnetic_monitor_24);
 
 // Image declarations
 LV_IMG_DECLARE(time_start);

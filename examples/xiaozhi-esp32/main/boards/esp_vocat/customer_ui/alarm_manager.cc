@@ -3,6 +3,7 @@
 #include <esp_lv_adapter.h>
 #include "alarm_manager.h"
 #include "alarm_api.h"
+#include "magnetic_monitor.h"
 #include "csi_ui/ui/ui.h"
 #include "csi_ui/esp_radar_csi.h"
 
@@ -28,6 +29,7 @@ static lv_obj_t *container_time_up = NULL;
 static lv_obj_t *container_muyu = NULL;
 static lv_obj_t *container_screenW = NULL;
 static lv_obj_t *container_csi_behav = NULL;
+static lv_obj_t *container_magnetic_monitor = NULL;
 
 
 // ============================================================================
@@ -96,6 +98,10 @@ void alarm_create_ui()
     /* Create and register time up container */
     container_time_up = alarm_time_up_create_with_parent(scr);
     ui_bridge_register_page_with_cycle(PAGE_TIME_UP, &container_time_up, false);
+
+    /* Create and register the voice-only slider magnetic monitor page */
+    container_magnetic_monitor = magnetic_monitor_create_with_parent(scr);
+    ui_bridge_register_page_with_cycle("MAGNETIC_MONITOR", &container_magnetic_monitor, false);
 
     // /* Create and register CSI pages */
     // container_screenW = ui_ScreenW_screen_init(scr);

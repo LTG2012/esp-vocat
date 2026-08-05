@@ -9,6 +9,7 @@
 #include "esp_err.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +45,11 @@ extern "C" {
  * Data format: signed int16_t, big-endian, negative for left and positive for right.
  */
 #define VOCAT_BASE_CMD_SET_RELATIVE_ANGLE                 0x04
+
+/* VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR: control base magnetic monitor stream. */
+#define VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR                0x05
+#define VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR_DISABLE        0x0000
+#define VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR_ENABLE         0x0001
 
 // Command codes - Receive
 /* VOCAT_BASE_CMD_RECV_SLIDE_SWITCH: magnetic slide switch event.
@@ -81,6 +87,10 @@ extern "C" {
  * Data format: variable length.
  */
 #define VOCAT_BASE_CMD_RECV_PERCEPTION                    0x06
+
+/* VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR: version(1), X/Y/Z raw values (2 each),
+ * filtered magnetic value(2), delta(2), position(1). */
+#define VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR               0x05
 
 /* VOCAT_BASE_CMD_RECV_ACTION: action status notification.
  * Data format: uint16_t, big-endian.
@@ -181,6 +191,9 @@ esp_err_t vocat_base_control_set_action(int action);
  *       - Other   Error code if setting failed
  */
 esp_err_t vocat_base_control_set_calibrate(void);
+
+/** Enable or disable the base 10 Hz magnetic monitor data stream. */
+esp_err_t vocat_base_control_set_magnetic_monitor(bool enabled);
 
 /**
  * @brief  Deinitialize echo base control module

@@ -11,6 +11,7 @@
 #include <cstring>
 #include "customer_ui/alarm_api.h"
 #include "ui_bridge.h"
+#include "magnetic_monitor.h"
 
 #define TAG "DevTools"
 
@@ -115,6 +116,10 @@ void DevTools::Initialize(EspS3Cat* board)
             }
         } else if (action == "go_home")
         {
+            if (magnetic_monitor_is_active()) {
+                vocat_base_control_set_magnetic_monitor(false);
+                magnetic_monitor_hide();
+            }
             ui_bridge_switch_page(UI_BRIDGE_PAGE_HOME);
         } else
         {
@@ -186,6 +191,28 @@ void DevTools::Initialize(EspS3Cat* board)
         ESP_LOGI(TAG, "Set base angle: direction=%s, relative=%d, target=%d", direction.c_str(),
                  relative_angle, target_angle);
         return vocat_base_control_set_angle(target_angle) == ESP_OK;
+    });
+
+    std::snprintf(buffer, sizeof(buffer), "%s",
+                  is_zh ?
+                  "控制滑块磁场监测页面。用户说‘进入滑块监测’或‘打开滑块监测’时 enabled=true；说‘退出滑块监测’、‘关闭滑块监测’或‘返回主页’时 enabled=false。监测期间滑块动作只展示，不执行日常对话或技能。"
+                  :
+                  "Control the magnetic slider monitor page. Enable it to enter the monitor page and disable it to leave it.");
+    mcp_server.AddTool("self.echo_base.set_magnetic_monitor", buffer,
+    PropertyList({
+        Property("enabled", kPropertyTypeBoolean),
+    }), [](const PropertyList & properties) -> ReturnValue {
+        const bool enabled = properties["enabled"].value<bool>();
+        if (vocat_base_control_set_magnetic_monitor(enabled) != ESP_OK) {
+            return false;
+        }
+
+        if (enabled) {
+            magnetic_monitor_show();
+        } else {
+            magnetic_monitor_hide();
+        }
+        return true;
     });
 
     // Audio analysis mode control

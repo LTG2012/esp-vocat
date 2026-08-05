@@ -11,6 +11,7 @@
 #include <esp_timer.h>
 #include "customer_ui/alarm_manager.h"
 #include "customer_ui/alarm_api.h"
+#include "magnetic_monitor.h"
 
 #define TAG "BaseControl"
 
@@ -97,13 +98,13 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
 
     emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
 
-    // if (cmd != VOCAT_BASE_CMD_RECV_HEARTBEAT) {
+    if (cmd != VOCAT_BASE_CMD_RECV_HEARTBEAT && cmd != VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR) {
         printf("Handle: cmd=%02X, ", cmd);
         for (int i = 0; i < data_len; i++) {
             printf("%02X ", data[i]);
         }
         printf("\n");
-    // }
+    }
 
     switch (cmd) {
     case VOCAT_BASE_CMD_RECV_SLIDE_SWITCH: {
@@ -111,6 +112,10 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
             auto &app = Application::GetInstance();
 
             uint16_t event = (data[0] << 8) | data[1];
+            if (magnetic_monitor_is_active()) {
+                magnetic_monitor_record_event(event);
+                break;
+            }
             switch (event) {
             case VOCAT_BASE_CMD_RECV_SWITCH_SLIDE_DOWN:
                 ESP_LOGI(TAG, "Slide switch down");
@@ -162,6 +167,19 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
                 break;
             }
         }
+        break;
+    }
+    case VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR: {
+        if (data_len != 12 || data[0] != 0x01) {
+            ESP_LOGW(TAG, "Invalid magnetic monitor payload: len=%d", data_len);
+            break;
+        }
+
+        const auto read_int16 = [data](int offset) {
+            return static_cast<int16_t>((data[offset] << 8) | data[offset + 1]);
+        };
+        magnetic_monitor_handle_sample(read_int16(1), read_int16(3), read_int16(5),
+                                       read_int16(7), read_int16(9), data[11]);
         break;
     }
     case VOCAT_BASE_CMD_RECV_PERCEPTION: {

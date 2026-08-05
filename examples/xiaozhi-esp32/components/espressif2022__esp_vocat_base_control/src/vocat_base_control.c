@@ -212,6 +212,14 @@ esp_err_t vocat_base_control_set_calibrate(void)
                                                  VOCAT_BASE_CMD_SET_CALIBRATE_START);
 }
 
+esp_err_t vocat_base_control_set_magnetic_monitor(bool enabled)
+{
+    ESP_LOGI(TAG, "Set magnetic monitor: %s", enabled ? "enabled" : "disabled");
+    return vocat_base_control_send_command_frame(
+        VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR,
+        enabled ? VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR_ENABLE : VOCAT_BASE_CMD_SET_MAGNETIC_MONITOR_DISABLE);
+}
+
 static bool vocat_base_control_parse_response_frame(uint8_t *frame, int frame_len, uint8_t *cmd, uint8_t **data, int *data_len)
 {
     if (frame_len < FRAME_MIN_SIZE) {
