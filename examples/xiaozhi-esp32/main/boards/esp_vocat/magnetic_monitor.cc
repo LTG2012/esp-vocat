@@ -7,11 +7,9 @@
 #include <string.h>
 
 #include "customer_ui/alarm_manager.h"
-#include "ui_bridge.h"
 
 namespace {
 
-constexpr const char *kMagneticMonitorPage = "MAGNETIC_MONITOR";
 constexpr uint32_t kHistorySize = 60;
 constexpr int64_t kDataTimeoutUs = 1000 * 1000;
 
@@ -168,13 +166,11 @@ void magnetic_monitor_show(void)
     s_ui.active = true;
     reset_ui_locked();
     esp_lv_adapter_unlock();
-    ui_bridge_switch_page(kMagneticMonitorPage);
 }
 
 void magnetic_monitor_hide(void)
 {
     s_ui.active = false;
-    ui_bridge_switch_page(UI_BRIDGE_PAGE_HOME);
 }
 
 bool magnetic_monitor_is_active(void)

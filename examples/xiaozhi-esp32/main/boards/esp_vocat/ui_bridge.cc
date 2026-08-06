@@ -3,6 +3,8 @@
 #include "wifi_board.h"
 #include "display/emote_display.h"
 #include "customer_ui/alarm_api.h"
+#include "magnetic_monitor.h"
+#include "vocat_base_control.h"
 #include "application.h"
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -10,6 +12,7 @@
 #include <esp_lv_adapter.h>
 
 #define TAG "ui_bridge"
+#define UI_BRIDGE_PAGE_MAGNETIC_MONITOR         "MAGNETIC_MONITOR"
 
 /* Gesture detection state structure */
 typedef struct {
@@ -429,6 +432,23 @@ void ui_bridge_switch_page(const char *page_id)
     if (page_id == NULL) {
         ESP_LOGW(TAG, "Cannot switch to NULL page");
         return;
+    }
+
+    const bool was_magnetic_monitor = s_current_page != NULL &&
+                                      strcmp(s_current_page, UI_BRIDGE_PAGE_MAGNETIC_MONITOR) == 0;
+    const bool entering_magnetic_monitor = strcmp(page_id, UI_BRIDGE_PAGE_MAGNETIC_MONITOR) == 0;
+    if (!was_magnetic_monitor && entering_magnetic_monitor) {
+        ESP_LOGI(TAG, "Enter magnetic monitor: enable base data stream");
+        if (vocat_base_control_set_magnetic_monitor(true) != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to enable magnetic monitor data stream");
+        }
+        magnetic_monitor_show();
+    } else if (was_magnetic_monitor && !entering_magnetic_monitor) {
+        ESP_LOGI(TAG, "Leave magnetic monitor: disable base data stream");
+        if (vocat_base_control_set_magnetic_monitor(false) != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to disable magnetic monitor data stream");
+        }
+        magnetic_monitor_hide();
     }
 
     /* Update current page state */

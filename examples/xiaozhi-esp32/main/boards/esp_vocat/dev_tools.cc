@@ -11,7 +11,6 @@
 #include <cstring>
 #include "customer_ui/alarm_api.h"
 #include "ui_bridge.h"
-#include "magnetic_monitor.h"
 
 #define TAG "DevTools"
 
@@ -116,10 +115,6 @@ void DevTools::Initialize(EspS3Cat* board)
             }
         } else if (action == "go_home")
         {
-            if (magnetic_monitor_is_active()) {
-                vocat_base_control_set_magnetic_monitor(false);
-                magnetic_monitor_hide();
-            }
             ui_bridge_switch_page(UI_BRIDGE_PAGE_HOME);
         } else
         {
@@ -203,15 +198,7 @@ void DevTools::Initialize(EspS3Cat* board)
         Property("enabled", kPropertyTypeBoolean),
     }), [](const PropertyList & properties) -> ReturnValue {
         const bool enabled = properties["enabled"].value<bool>();
-        if (vocat_base_control_set_magnetic_monitor(enabled) != ESP_OK) {
-            return false;
-        }
-
-        if (enabled) {
-            magnetic_monitor_show();
-        } else {
-            magnetic_monitor_hide();
-        }
+        ui_bridge_switch_page(enabled ? "MAGNETIC_MONITOR" : UI_BRIDGE_PAGE_HOME);
         return true;
     });
 
