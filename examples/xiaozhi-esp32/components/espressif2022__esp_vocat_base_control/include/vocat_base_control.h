@@ -92,6 +92,10 @@ extern "C" {
  * filtered magnetic value(2), delta(2), position(1). */
 #define VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR               0x05
 
+/* VOCAT_BASE_CMD_RECV_MAGNETIC_CALIBRATION_STATUS: version(1), calibration
+ * state, flags, and 11 signed 16-bit diagnostic values. */
+#define VOCAT_BASE_CMD_RECV_MAGNETIC_CALIBRATION_STATUS    0x07
+
 /* VOCAT_BASE_CMD_RECV_ACTION: action status notification.
  * Data format: uint16_t, big-endian.
  */

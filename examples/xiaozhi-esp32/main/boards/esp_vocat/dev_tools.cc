@@ -104,15 +104,13 @@ void DevTools::Initialize(EspS3Cat* board)
             action_value = VOCAT_BASE_CMD_SET_ACTION_CAT_NUZZLE;
         } else if (action == "calibrate")
         {
-            vocat_base_control_set_calibrate();
-            BaseControl* base_control = board->GetBaseControl();
-            if (base_control != nullptr) {
-                bool completed = base_control->WaitForCalibrationComplete(30000);
-                if (!completed) {
-                    ESP_LOGW(TAG, "Calibration wait timeout");
-                    return false;
-                }
+            esp_err_t ret = vocat_base_control_set_calibrate();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to start calibration: %d", ret);
+                return false;
             }
+            ESP_LOGI(TAG, "Calibration started; completion is shown on the diagnostic page");
+            return true;
         } else if (action == "go_home")
         {
             ui_bridge_switch_page(UI_BRIDGE_PAGE_HOME);

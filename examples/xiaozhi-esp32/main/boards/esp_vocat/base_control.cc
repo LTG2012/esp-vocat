@@ -23,6 +23,13 @@ static void lvgl_muyu_click_cb(void *arg)
     lvgl_muyu_click();
 }
 
+static void lvgl_begin_magnetic_calibration_cb(void *arg)
+{
+    (void)arg;
+    magnetic_monitor_begin_calibration();
+    ui_bridge_switch_page("MAGNETIC_MONITOR");
+}
+
 BaseControl::BaseControl(EspS3Cat* board) : board_(board)
 {
     vocat_base_online_ = false;
@@ -98,7 +105,9 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
 
     emote::EmoteDisplay* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
 
-    if (cmd != VOCAT_BASE_CMD_RECV_HEARTBEAT && cmd != VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR) {
+    if (cmd != VOCAT_BASE_CMD_RECV_HEARTBEAT &&
+        cmd != VOCAT_BASE_CMD_RECV_MAGNETIC_MONITOR &&
+        cmd != VOCAT_BASE_CMD_RECV_MAGNETIC_CALIBRATION_STATUS) {
         printf("Handle: cmd=%02X, ", cmd);
         for (int i = 0; i < data_len; i++) {
             printf("%02X ", data[i]);
@@ -112,7 +121,14 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
             auto &app = Application::GetInstance();
 
             uint16_t event = (data[0] << 8) | data[1];
-            if (magnetic_monitor_is_active()) {
+            if (event == VOCAT_BASE_CMD_RECV_CALIBRATE_START) {
+                lv_async_call(lvgl_begin_magnetic_calibration_cb, nullptr);
+            }
+            const bool is_calibration_event =
+                event == VOCAT_BASE_CMD_RECV_CALIBRATE_START ||
+                event == VOCAT_BASE_CMD_RECV_CALIBRATE_STEP1 ||
+                event == VOCAT_BASE_CMD_RECV_CALIBRATE_STEP2;
+            if (magnetic_monitor_is_active() && !is_calibration_event) {
                 magnetic_monitor_record_event(event);
                 break;
             }
@@ -180,6 +196,25 @@ void BaseControl::HandleCommand(uint8_t cmd, uint8_t *data, int data_len)
         };
         magnetic_monitor_handle_sample(read_int16(1), read_int16(3), read_int16(5),
                                        read_int16(7), read_int16(9), data[11]);
+        break;
+    }
+    case VOCAT_BASE_CMD_RECV_MAGNETIC_CALIBRATION_STATUS: {
+        if (data_len != 25 || data[0] != 0x01) {
+            ESP_LOGW(TAG, "Invalid magnetic calibration payload: len=%d", data_len);
+            break;
+        }
+
+        const auto read_int16 = [data](int offset) {
+            return static_cast<int16_t>((data[offset] << 8) | data[offset + 1]);
+        };
+        magnetic_monitor_handle_calibration_status(
+            data[1], data[2],
+            read_int16(3), read_int16(5), read_int16(7),
+            static_cast<uint16_t>(read_int16(9)),
+            static_cast<uint16_t>(read_int16(11)),
+            read_int16(13), read_int16(15),
+            static_cast<uint16_t>(read_int16(17)),
+            read_int16(19), read_int16(21), read_int16(23));
         break;
     }
     case VOCAT_BASE_CMD_RECV_PERCEPTION: {
