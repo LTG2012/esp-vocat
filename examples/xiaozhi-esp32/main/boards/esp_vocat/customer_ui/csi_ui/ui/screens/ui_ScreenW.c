@@ -127,7 +127,7 @@ lv_obj_t *ui_ScreenW_screen_init(lv_obj_t *parent)
     lv_obj_set_x(ui_ScreenW_LabelTitle, 0);
     lv_obj_set_y(ui_ScreenW_LabelTitle, -100);
     lv_obj_set_align(ui_ScreenW_LabelTitle, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_ScreenW_LabelTitle, " CSI Waveform Amplitude ");
+    lv_label_set_text(ui_ScreenW_LabelTitle, " CSI Motion Activity ");
     lv_obj_set_style_text_color(ui_ScreenW_LabelTitle, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_ScreenW_LabelTitle, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_ScreenW_LabelTitle, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);

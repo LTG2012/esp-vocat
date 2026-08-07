@@ -80,6 +80,8 @@ lv_obj_t *ui_csi_behav_Screen_screen_init(lv_obj_t *parent)
      * The native 250x223 asset already fits inside the 300x280 container.
      */
     lv_image_set_scale(ui_csi_3_Dial_img, 256);
+    /* The dial image contains placeholder time labels, not CSI measurements. */
+    lv_obj_add_flag(ui_csi_3_Dial_img, LV_OBJ_FLAG_HIDDEN);
 
     ui_csi_3_circle_line = lv_arc_create(ui_csi_3_pie_cont);
     lv_obj_set_width(ui_csi_3_circle_line, 191);
@@ -141,6 +143,8 @@ lv_obj_t *ui_csi_behav_Screen_screen_init(lv_obj_t *parent)
 
     lv_obj_set_style_bg_color(ui_csi_3_pie_arc1, lv_color_hex(0xFFFFFF), LV_PART_KNOB | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(ui_csi_3_pie_arc1, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
+    /* Placeholder segment; the main arc is the only real-time activity ring. */
+    lv_obj_add_flag(ui_csi_3_pie_arc1, LV_OBJ_FLAG_HIDDEN);
 
     ui_csi_3_pie_arc2 = lv_arc_create(ui_csi_3_pie_cont);
     lv_obj_set_width(ui_csi_3_pie_arc2, 191);
@@ -163,6 +167,8 @@ lv_obj_t *ui_csi_behav_Screen_screen_init(lv_obj_t *parent)
 
     lv_obj_set_style_bg_color(ui_csi_3_pie_arc2, lv_color_hex(0xFFFFFF), LV_PART_KNOB | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(ui_csi_3_pie_arc2, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
+    /* Placeholder segment; the main arc is the only real-time activity ring. */
+    lv_obj_add_flag(ui_csi_3_pie_arc2, LV_OBJ_FLAG_HIDDEN);
 
     ui_csi_3_occupied_pan = lv_obj_create(ui_csi_3_pie_cont);
     lv_obj_set_width(ui_csi_3_occupied_pan, 10);
@@ -290,7 +296,7 @@ lv_obj_t *ui_csi_behav_Screen_screen_init(lv_obj_t *parent)
     lv_obj_set_x(ui_csi_behav_lab, 0);
     lv_obj_set_y(ui_csi_behav_lab, -132);
     lv_obj_set_align(ui_csi_behav_lab, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_csi_behav_lab, "Behavior Detection");
+    lv_label_set_text(ui_csi_behav_lab, "CSI Activity");
     lv_obj_set_style_text_color(ui_csi_behav_lab, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_csi_behav_lab, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_csi_behav_lab, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);

@@ -248,6 +248,11 @@ static void process_csi_data_task(void *pvParameter)
 {
     csi_recv_queue_t csi_recv_queue_data;
     Complex_Iq x_iq[64];
+    float previous_tap_magnitude[64] = {};
+    bool has_previous_taps = false;
+    float motion_baseline = 0.0f;
+    float motion_noise = 0.0f;
+    int calibration_frames = 0;
     float cir = 0;
     float pha = 0;
 
@@ -269,8 +274,65 @@ static void process_csi_data_task(void *pvParameter)
             x_iq[i].imag = _IQ16(csi_recv_queue_data.buf[2 * i + 1]);
         }
         fft_iq(x_iq, 1);
-        cir = complex_magnitude_iq(x_iq[0]) * scaling_factor;
-        pha = complex_phase_iq(x_iq[0]);
+
+        /*
+         * 使用整段 CIR 幅度向量的余弦距离，而不是逐点绝对差。
+         * 该指标会消除整体增益变化，专注于多径形状是否变化。
+         */
+        float current_energy = 0.0f;
+        float previous_energy = 0.0f;
+        float correlation = 0.0f;
+        for (int i = 0; i < 64; ++i) {
+            float magnitude = complex_magnitude_iq(x_iq[i]) * scaling_factor;
+            if (!isfinite(magnitude) || magnitude < 0.0f) {
+                magnitude = 0.0f;
+            }
+            if (has_previous_taps) {
+                correlation += magnitude * previous_tap_magnitude[i];
+                previous_energy += previous_tap_magnitude[i] * previous_tap_magnitude[i];
+            }
+            current_energy += magnitude * magnitude;
+            previous_tap_magnitude[i] = magnitude;
+        }
+        float raw_motion = 0.0f;
+        if (has_previous_taps && current_energy > 1e-8f && previous_energy > 1e-8f) {
+            float cosine_similarity = correlation / sqrtf(current_energy * previous_energy);
+            cosine_similarity = fminf(1.0f, fmaxf(-1.0f, cosine_similarity));
+            raw_motion = fmaxf(0.0f, 1.0f - cosine_similarity);
+        }
+        has_previous_taps = true;
+
+        /*
+         * 进入 CSI 后先用约 2 秒数据建立静态噪声基线。之后只有超过
+         * 基线三倍噪声的变化才显示为活动值，静止时曲线保持接近 0。
+         */
+        constexpr int kCalibrationFrames = 40;
+        if (calibration_frames < kCalibrationFrames) {
+            calibration_frames++;
+            float delta = raw_motion - motion_baseline;
+            motion_baseline += delta / calibration_frames;
+            motion_noise += (fabsf(delta) - motion_noise) / calibration_frames;
+            cir = 0.0f;
+            if (calibration_frames == kCalibrationFrames) {
+                ESP_LOGI(TAG, "CSI motion calibrated: baseline=%.5f noise=%.5f",
+                         motion_baseline, motion_noise);
+            }
+        } else {
+            float delta = raw_motion - motion_baseline;
+            if (delta <= motion_noise * 3.0f) {
+                motion_baseline += 0.02f * delta;
+                motion_noise += 0.02f * (fabsf(delta) - motion_noise);
+            }
+            /*
+             * 相关距离在静止环境中仍会有约百分之一的自然波动。
+             * 先使用 0.015 的最小门限抑制本底，再在 0.10 的有效
+             * 变化区间映射到 0–100，避免微小噪声持续显示为满格。
+             */
+            float motion_threshold = fmaxf(motion_noise * 5.0f, 0.015f);
+            float score = (delta - motion_threshold) / 0.10f;
+            cir = fminf(100.0f, fmaxf(0.0f, score * 100.0f));
+        }
+        pha = raw_motion;
         if (!isfinite(cir) || cir < 0.0f) {
             cir = 0.0f;
         }
@@ -494,8 +556,8 @@ RadarCSI *RadarCSI::getInstance()
 RadarCSI::RadarCSI():
     csi_display_queue(nullptr),
     ser(nullptr),
-    avg_index(0),
-    avg_count(0),
+    motion_trend(0.0f),
+    motion_trend_valid(false),
     chart_initialized(false),
     chart_count(0),
     is_processing_stopped(true),  // 初始化时默认停止，等UI准备好后再恢复
@@ -505,11 +567,14 @@ RadarCSI::RadarCSI():
     chart_m_avg_index(0),
     chart_m_avg_count(0),
     chart_m_count(0),
-    chart_m_initialized(false)
+    chart_m_initialized(false),
+    behavior_occupied(false),
+    behavior_active_since_us(0),
+    behavior_inactive_since_us(0),
+    behavior_activity(0.0f)
 {
     memset(range, 0, sizeof(range));
     memset(y_range, 0, sizeof(y_range));
-    memset(avg_buffer, 0, sizeof(avg_buffer));
     memset(&last_data, 0, sizeof(last_data));
 
     memset(chart_m_range, 0, sizeof(chart_m_range));
@@ -624,45 +689,27 @@ void RadarCSI::doUpdateChart(const csi_data_t &data, bool reset_timer)
         return;
     }
 
-    // 最近 AVG_WINDOW 个点做简单滑动平均滤波，平滑振幅波形
-    avg_buffer[avg_index] = data.cir;
-    avg_index = (avg_index + 1) % AVG_WINDOW;
-    if (avg_count < AVG_WINDOW) {
-        avg_count++;
+    /*
+     * 逐帧运动强度会包含多径和接收噪声。指数趋势滤波相较固定窗口平均
+     * 对新的动作立即响应，同时不会把曲线压成复杂的高频锯齿。
+     */
+    if (!motion_trend_valid) {
+        motion_trend = data.cir;
+        motion_trend_valid = true;
+    } else {
+        motion_trend += MOTION_TREND_ALPHA * (data.cir - motion_trend);
     }
 
-    float cir_avg = 0.0f;
-    for (int i = 0; i < avg_count; ++i) {
-        cir_avg += avg_buffer[i];
-    }
-    cir_avg /= (avg_count > 0 ? avg_count : 1);
-
-    // 存储滤波后的当前数据点（单通道）
-    range[chart_count] = cir_avg * 5;
-
-    // 计算Y轴范围
-    y_range[0] = 500;
-    y_range[1] = 0;
-    for (int i = 0; i < LVGL_CHART_POINTS; i++) {
-        if (y_range[0] > range[i]) {
-            y_range[0] = range[i];
-        }
-        if (y_range[1] < range[i]) {
-            y_range[1] = range[i];
-        }
-    }
-    uint8_t y_range_size = 30;
-    // 确保Y轴范围至少为100
-    if ((y_range[1] - y_range[0]) < y_range_size) {
-        y_range[1] += (y_range_size - y_range[1] + y_range[0]) / 2;
-        y_range[0] -= (y_range_size - y_range[1] + y_range[0]) / 2;
-    }
+    // 0–100 固定活动度量表；不再因为自动缩放把本底噪声铺满整个图表。
+    range[chart_count] = motion_trend;
+    y_range[0] = 0.0f;
+    y_range[1] = 100.0f;
 
     // 周期性打印图表相关数据，便于调试
     static int s_log_count = 0;
-    if ((s_log_count++ % 200) == 0) {
+    if ((s_log_count++ % 50) == 0) {
         ESP_LOGI(TAG,
-                 "chart_idx=%u, cir=%.3f, pha=%.3f, range=%.3f, y_min=%d, y_max=%d",
+                 "chart_idx=%u, activity=%.2f, raw=%.5f, display=%.2f, y_min=%d, y_max=%d",
                  chart_count,
                  data.cir,
                  data.pha,
@@ -682,10 +729,101 @@ void RadarCSI::doUpdateChart(const csi_data_t &data, bool reset_timer)
         }
     }
 
+    updateBehavior(motion_trend);
+
     // 更新计数器
     chart_count++;
     if (chart_count >= LVGL_CHART_POINTS) {
         chart_count = 0;
+    }
+}
+
+void RadarCSI::updateBehavior(float activity)
+{
+    /*
+     * CSI 活动度反映的是环境中的动态变化，而非摄像头式的人体识别。
+     * 使用滞回和保持时间：动作需要连续 1 秒才确认“在位”，确认后要
+     * 连续静止 15 秒才切回“离位”，这样挥动、噪声和单帧异常都不会
+     * 让状态频繁闪烁。
+     */
+    const lv_color_t kActiveColor = lv_color_hex(0x6B9FF8);
+    const lv_color_t kInactiveColor = lv_color_hex(0x656565);
+    const lv_color_t kTextActiveColor = lv_color_hex(0xFFFFFF);
+    const lv_color_t kTextInactiveColor = lv_color_hex(0xB0B0B0);
+
+    if (activity < 0.0f) {
+        activity = 0.0f;
+    } else if (activity > 100.0f) {
+        activity = 100.0f;
+    }
+    behavior_activity = activity;
+
+    const int64_t now_us = esp_timer_get_time();
+    bool state_changed = false;
+    if (!behavior_occupied) {
+        behavior_inactive_since_us = 0;
+        if (activity >= BEHAVIOR_ON_THRESHOLD) {
+            if (behavior_active_since_us == 0) {
+                behavior_active_since_us = now_us;
+            } else if (now_us - behavior_active_since_us >= BEHAVIOR_ON_HOLD_US) {
+                behavior_occupied = true;
+                behavior_active_since_us = 0;
+                state_changed = true;
+            }
+        } else {
+            behavior_active_since_us = 0;
+        }
+    } else {
+        behavior_active_since_us = 0;
+        if (activity <= BEHAVIOR_OFF_THRESHOLD) {
+            if (behavior_inactive_since_us == 0) {
+                behavior_inactive_since_us = now_us;
+            } else if (now_us - behavior_inactive_since_us >= BEHAVIOR_OFF_HOLD_US) {
+                behavior_occupied = false;
+                behavior_inactive_since_us = 0;
+                state_changed = true;
+            }
+        } else {
+            behavior_inactive_since_us = 0;
+        }
+    }
+
+    if (state_changed) {
+        ESP_LOGI(TAG, "Behavior state: %s (activity=%.1f)",
+                 behavior_occupied ? "Occupied" : "Unoccupied", activity);
+    }
+
+    /*
+     * 此函数由 processData() 在 LVGL 锁内调用。行为页与曲线页共用
+     * CSI 生命周期，因此页面不可见时也更新状态；用户滑入行为页即可
+     * 看到最新结果，不需要额外任务或队列。
+     */
+    if (!ui_csi_behav_Screen) {
+        return;
+    }
+
+    if (ui_csi_3_pie_arc) {
+        lv_arc_set_value(ui_csi_3_pie_arc, (int32_t)(activity * 3.6f));
+    }
+    if (ui_csi_3_occupied_pan) {
+        lv_obj_set_style_bg_color(ui_csi_3_occupied_pan,
+                                  behavior_occupied ? kActiveColor : kInactiveColor,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_unoccupied_pan) {
+        lv_obj_set_style_bg_color(ui_csi_3_unoccupied_pan,
+                                  behavior_occupied ? kInactiveColor : kActiveColor,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_occupied_lab) {
+        lv_obj_set_style_text_color(ui_csi_3_occupied_lab,
+                                    behavior_occupied ? kTextActiveColor : kTextInactiveColor,
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_unoccupied_lab) {
+        lv_obj_set_style_text_color(ui_csi_3_unoccupied_lab,
+                                    behavior_occupied ? kTextInactiveColor : kTextActiveColor,
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 }
 
@@ -897,6 +1035,12 @@ void RadarCSI::processChartMData()
 void RadarCSI::stopDataProcessing()
 {
     is_processing_stopped = true;
+    motion_trend = 0.0f;
+    motion_trend_valid = false;
+    behavior_occupied = false;
+    behavior_active_since_us = 0;
+    behavior_inactive_since_us = 0;
+    behavior_activity = 0.0f;
 
     // 停止定时器
     if (update_timer) {
@@ -935,9 +1079,8 @@ void RadarCSI::resetChartState()
     ser = nullptr;
 
     // 重置滤波器状态
-    avg_index = 0;
-    avg_count = 0;
-    memset(avg_buffer, 0, sizeof(avg_buffer));
+    motion_trend = 0.0f;
+    motion_trend_valid = false;
     memset(range, 0, sizeof(range));
     memset(y_range, 0, sizeof(y_range));
     memset(&last_data, 0, sizeof(last_data));
