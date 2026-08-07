@@ -25,7 +25,9 @@ static void timer_tick_cb(lv_timer_t *timer)
 
     /* Check if current page is SCREEN_W page */
     const char *current_page = ui_bridge_get_current_page();
-    if (current_page == NULL || strcmp(current_page, "SCREEN_W") != 0) {
+    if (current_page == NULL ||
+        (strcmp(current_page, "SCREEN_W") != 0 &&
+         strcmp(current_page, "CSI_BEHAV") != 0)) {
         return;
     }
 
@@ -45,6 +47,8 @@ lv_obj_t *ui_ScreenW_screen_init(lv_obj_t *parent)
     lv_obj_set_style_border_width(ui_ScreenW, 0, 0);
     lv_obj_set_style_pad_all(ui_ScreenW, 0, 0);
     lv_obj_clear_flag(ui_ScreenW, LV_OBJ_FLAG_SCROLLABLE);
+    /* Page containers are hidden until ui_bridge selects this page. */
+    lv_obj_add_flag(ui_ScreenW, LV_OBJ_FLAG_HIDDEN);
 
 
     ui_ScreenW_Chart = lv_chart_create(ui_ScreenW);

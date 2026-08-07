@@ -31,6 +31,13 @@ static lv_obj_t *container_screenW = NULL;
 static lv_obj_t *container_csi_behav = NULL;
 static lv_obj_t *container_magnetic_monitor = NULL;
 
+static bool is_csi_page(const char *page_name)
+{
+    return page_name != NULL &&
+           (strcmp(page_name, PAGE_SCREEN_W) == 0 ||
+            strcmp(page_name, PAGE_CSI_BEHAV) == 0);
+}
+
 
 // ============================================================================
 // Global Variables
@@ -47,34 +54,33 @@ static bool main_ui_page_switch_callback(const char *target_page, void *user_dat
     const char *current_page = ui_bridge_get_current_page();
     ESP_LOGI(TAG, "Page switch: %s -> %s", current_page ? current_page : "NULL", target_page ? target_page : "NULL");
 
+    /* CSI page lifecycle */
+    if (is_csi_page(target_page) && !is_csi_page(current_page)) {
+        RadarCSI *radar = RadarCSI::getInstance();
+        if (radar != nullptr) {
+            ESP_LOGI(TAG, "Enter CSI page (%s): start CSI pipeline", target_page);
+            radar->init();
+            radar->initCharts();
+            radar->resumeDataProcessing();
+            radar->startPipeline();
+            radar->startPing();
+        }
+    }
+
+    if (is_csi_page(current_page) && !is_csi_page(target_page)) {
+        RadarCSI *radar = RadarCSI::getInstance();
+        if (radar != nullptr) {
+            ESP_LOGI(TAG, "Leave CSI page: stop CSI pipeline and release resources");
+            radar->stopPipeline();
+            radar->stopDataProcessing();
+        }
+    }
+
     /* Special handling for pomodoro page */
     if (target_page != NULL && strcmp(target_page, PAGE_POMODORO) == 0 &&
             (current_page == NULL || strcmp(current_page, PAGE_POMODORO) != 0)) {
         alarm_start_pomodoro(5);
         return true;  /* Handled, skip default switch */
-    }
-
-    /* CSI waveform page lifecycle */
-    if (target_page != NULL && strcmp(target_page, PAGE_SCREEN_W) == 0 &&
-            (current_page == NULL || strcmp(current_page, PAGE_SCREEN_W) != 0)) {
-        RadarCSI *radar = RadarCSI::getInstance();
-        if (radar != nullptr) {
-            ESP_LOGI(TAG, "Enter SCREEN_W: start CSI pipeline");
-            radar->init();
-            radar->initCharts();
-            radar->resumeDataProcessing();
-            radar->startPing();
-            radar->startPipeline();
-        }
-    }
-
-    if (current_page != NULL && strcmp(current_page, PAGE_SCREEN_W) == 0 &&
-            (target_page == NULL || strcmp(target_page, PAGE_SCREEN_W) != 0)) {
-        RadarCSI *radar = RadarCSI::getInstance();
-        if (radar != nullptr) {
-            ESP_LOGI(TAG, "Leave SCREEN_W: stop ping");
-            radar->stopPing();
-        }
     }
 
     return false;  /* Use default switch */
@@ -103,15 +109,15 @@ void alarm_create_ui()
     container_magnetic_monitor = magnetic_monitor_create_with_parent(scr);
     ui_bridge_register_page_with_cycle("MAGNETIC_MONITOR", &container_magnetic_monitor, true);
 
-    // /* Create and register CSI pages */
-    // container_screenW = ui_ScreenW_screen_init(scr);
-    // ui_bridge_register_page_with_cycle(PAGE_SCREEN_W, &container_screenW, true);
+    /* Create and register CSI pages in the left/right swipe cycle */
+    container_screenW = ui_ScreenW_screen_init(scr);
+    ui_bridge_register_page_with_cycle(PAGE_SCREEN_W, &container_screenW, true);
 
-    // container_csi_behav = ui_csi_behav_Screen_screen_init(scr);
-    // ui_bridge_register_page_with_cycle(PAGE_CSI_BEHAV, &container_csi_behav, true);
+    container_csi_behav = ui_csi_behav_Screen_screen_init(scr);
+    ui_bridge_register_page_with_cycle(PAGE_CSI_BEHAV, &container_csi_behav, true);
 
-    // /* Register page switch callback for custom handling (e.g., pomodoro) */
-    // ui_bridge_set_page_switch_callback(main_ui_page_switch_callback, NULL);
+    /* Register page switch callback for custom page lifecycles */
+    ui_bridge_set_page_switch_callback(main_ui_page_switch_callback, NULL);
 }
 
 void alarm_start_pomodoro(int32_t minutes)

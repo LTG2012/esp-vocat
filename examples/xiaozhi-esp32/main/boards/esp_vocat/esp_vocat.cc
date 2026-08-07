@@ -174,8 +174,8 @@ void start_lvgl(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel
                                                          static_cast<uint16_t>(width),
                                                          static_cast<uint16_t>(height),
                                                          ESP_LV_ADAPTER_ROTATE_0);
-    display_config.profile.use_psram = true;
-    // display_config.profile.buffer_height = 20;
+    display_config.profile.use_psram = false;
+    display_config.profile.buffer_height = 10;
     display_config.profile.require_double_buffer = true;
 
     lv_display_t *display_ = esp_lv_adapter_register_display(&display_config);

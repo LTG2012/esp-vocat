@@ -16,3 +16,8 @@ examples/*/main/assets/lang_config.h
 # *.bin
 mmap_generate_*.h
 .clangd
+
+# Local serial-debug captures and helper scripts
+examples/xiaozhi-esp32/serial_capture*.log
+examples/xiaozhi-esp32/serial_*capture*.py
+examples/xiaozhi-esp-vocat_*.log

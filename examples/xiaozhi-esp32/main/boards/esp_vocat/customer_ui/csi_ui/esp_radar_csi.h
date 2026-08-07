@@ -68,6 +68,11 @@ public:
     void startPipeline();
 
     /**
+     * @brief 停止 CSI 采集流水线并释放其任务与队列
+     */
+    void stopPipeline();
+
+    /**
      * @brief 启动ping路由器
      */
     void startPing();
