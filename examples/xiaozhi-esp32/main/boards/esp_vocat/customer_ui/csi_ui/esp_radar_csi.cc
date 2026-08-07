@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/idf_additions.h"
 #include "customer_ui/csi_ui/ui/ui.h"
 
 // Wi‑Fi / CSI / Radar / Ping 相关
@@ -36,7 +37,7 @@
 
 // 与路由器之间 ping 的频率（次/秒）
 // #define CONFIG_SEND_FREQUENCY 50
-#define CONFIG_SEND_FREQUENCY 10
+#define CONFIG_SEND_FREQUENCY 20
 
 static const char *TAG = "radar_csi";
 
@@ -55,18 +56,43 @@ typedef struct {
 static QueueHandle_t s_csi_recv_queue = nullptr;
 static int64_t s_time_zero = 0;
 static bool s_csi_pipeline_started = false;
+static volatile bool s_csi_pipeline_active = false;
+static bool s_csi_capture_enabled = false;
+static bool s_ping_requested = false;
+static uint32_t s_csi_frame_id = 0;
+static uint32_t s_csi_callback_count = 0;
+static uint32_t s_csi_ap_match_count = 0;
+static uint32_t s_csi_sample_enqueue_count = 0;
+static uint32_t s_csi_sample_drop_count = 0;
+static uint32_t s_csi_ui_queue_count = 0;
+static TaskHandle_t s_csi_process_task = nullptr;
+static TaskHandle_t s_csi_wait_task = nullptr;
 
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
-    if (!info || !info->buf) {
+    constexpr size_t kRequiredIqBytes = 64 * 2;
+
+    if (!s_csi_pipeline_active || !info || !info->buf || info->len < kRequiredIqBytes) {
         ESP_LOGW(TAG, "<%s> wifi_csi_cb", esp_err_to_name(ESP_ERR_INVALID_ARG));
         return;
+    }
+
+    if ((++s_csi_callback_count % 200) == 0) {
+        ESP_LOGI(TAG, "CSI callbacks=%lu ap_match=%lu queued=%lu dropped=%lu ui_queued=%lu len=%u payload_len=%u",
+                 (unsigned long)s_csi_callback_count,
+                 (unsigned long)s_csi_ap_match_count,
+                 (unsigned long)s_csi_sample_enqueue_count,
+                 (unsigned long)s_csi_sample_drop_count,
+                 (unsigned long)s_csi_ui_queue_count,
+                 (unsigned)info->len,
+                 (unsigned)info->payload_len);
     }
 
     // 只接收来自当前连接 AP（路由器）的 CSI，ctx 里传入的是 AP 的 BSSID
     if (ctx && memcmp(info->mac, ctx, 6)) {
         return;
     }
+    s_csi_ap_match_count++;
 
     static uint8_t agc_gain = 0;
     static int8_t fft_gain = 0;
@@ -95,32 +121,50 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
-    csi_recv_queue_t *csi_send_queuedata = (csi_recv_queue_t *)heap_caps_calloc(1, sizeof(csi_recv_queue_t), MALLOC_CAP_SPIRAM);
-    if (!csi_send_queuedata) {
-        ESP_LOGW(TAG, "Failed to allocate memory for csi_send_queuedata in PSRAM");
-        return;
+    // CSI 回调由同一个 Wi-Fi 任务串行调用。使用固定 PSRAM 队列，避免
+    // 每个 CSI 包都分配/释放一次内存造成的延迟和堆碎片。
+    static csi_recv_queue_t csi_send_queuedata;
+    memset(&csi_send_queuedata, 0, sizeof(csi_send_queuedata));
+
+    /*
+     * The CSI callback is also invoked for packets without an application
+     * payload.  Never dereference payload unless the complete four-byte
+     * sequence field is present.  The fallback sequence is only a local
+     * diagnostic identifier and is not used for signal processing.
+     */
+    if (info->payload != nullptr && info->payload_len >= 19) {
+        memcpy(&(csi_send_queuedata.id), info->payload + 15, sizeof(uint32_t));
+    } else {
+        csi_send_queuedata.id = ++s_csi_frame_id;
     }
+    csi_send_queuedata.time = info->rx_ctrl.timestamp;
+    csi_send_queuedata.agc_gain = agc_gain;
+    csi_send_queuedata.fft_gain = fft_gain;
 
-    memcpy(&(csi_send_queuedata->id), info->payload + 15, sizeof(uint32_t));
-    csi_send_queuedata->time = info->rx_ctrl.timestamp;
-    csi_send_queuedata->agc_gain = agc_gain;
-    csi_send_queuedata->fft_gain = fft_gain;
-
-    memset(csi_send_queuedata->buf, 0, sizeof(csi_send_queuedata->buf));
-    size_t copy_len = info->len > sizeof(csi_send_queuedata->buf) - 8 ? sizeof(csi_send_queuedata->buf) - 8 : info->len;
-    memcpy(csi_send_queuedata->buf + 8, info->buf, copy_len);
+    size_t copy_len = info->len > sizeof(csi_send_queuedata.buf) - 8 ? sizeof(csi_send_queuedata.buf) - 8 : info->len;
+    memcpy(csi_send_queuedata.buf + 8, info->buf, copy_len);
 
     if (xQueueSend(s_csi_recv_queue, &csi_send_queuedata, 0) != pdTRUE) {
-        free(csi_send_queuedata);
+        s_csi_sample_drop_count++;
+    } else {
+        s_csi_sample_enqueue_count++;
     }
 }
 
-static void radar_wifi_csi_init()
+static bool radar_wifi_csi_init()
 {
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-
     if (!s_csi_recv_queue) {
-        s_csi_recv_queue = xQueueCreate(20, sizeof(csi_recv_queue_t *));
+        s_csi_recv_queue = xQueueCreateWithCaps(8, sizeof(csi_recv_queue_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_csi_recv_queue) {
+            ESP_LOGE(TAG, "Failed to create CSI receive queue in PSRAM");
+            return false;
+        }
+    }
+
+    esp_err_t err = esp_wifi_set_promiscuous(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable promiscuous mode: %s", esp_err_to_name(err));
+        return false;
     }
 
     // 参考 get-started/csi_recv_copy 的配置，针对 C5/C6
@@ -171,61 +215,153 @@ static void radar_wifi_csi_init()
 #endif
 
     static wifi_ap_record_t s_ap_info = {0};
-    ESP_ERROR_CHECK(esp_wifi_sta_get_ap_info(&s_ap_info));
+    err = esp_wifi_sta_get_ap_info(&s_ap_info);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "CSI start deferred: AP information unavailable: %s", esp_err_to_name(err));
+        return false;
+    }
 
-    ESP_ERROR_CHECK(esp_wifi_set_csi_config(&csi_config));
+    err = esp_wifi_set_csi_config(&csi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure CSI: %s", esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG, "CSI config applied");
     // 把 AP 的 BSSID 通过 ctx 传进回调，用来过滤 CSI
-    ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(wifi_csi_rx_cb, s_ap_info.bssid));
-    ESP_ERROR_CHECK(esp_wifi_set_csi(true));
+    err = esp_wifi_set_csi_rx_cb(wifi_csi_rx_cb, s_ap_info.bssid);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register CSI callback: %s", esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG, "CSI callback registered for AP " MACSTR, MAC2STR(s_ap_info.bssid));
+    err = esp_wifi_set_csi(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable CSI: %s", esp_err_to_name(err));
+        return false;
+    }
+    s_csi_capture_enabled = true;
+    ESP_LOGI(TAG, "CSI capture enabled");
+    return true;
 }
 
 static void process_csi_data_task(void *pvParameter)
 {
-    csi_recv_queue_t *csi_recv_queue_data = NULL;
+    csi_recv_queue_t csi_recv_queue_data;
     Complex_Iq x_iq[64];
+    float previous_tap_magnitude[64] = {};
+    bool has_previous_taps = false;
+    float motion_baseline = 0.0f;
+    float motion_noise = 0.0f;
+    int calibration_frames = 0;
     float cir = 0;
     float pha = 0;
 
     s_time_zero = esp_timer_get_time();
 
-    while (xQueueReceive(s_csi_recv_queue, &csi_recv_queue_data, portMAX_DELAY) == pdTRUE) {
-        if (!csi_recv_queue_data) {
-            continue;
-        }
+    while (s_csi_pipeline_active &&
+           xQueueReceive(s_csi_recv_queue, &csi_recv_queue_data, portMAX_DELAY) == pdTRUE) {
 
 #if !CONFIG_FORCE_GAIN && CONFIG_GAIN_CONTROL
         float scaling_factor = 0;
-        esp_csi_gain_ctrl_get_gain_compensation(&scaling_factor, csi_recv_queue_data->agc_gain, csi_recv_queue_data->fft_gain);
+        esp_csi_gain_ctrl_get_gain_compensation(&scaling_factor, csi_recv_queue_data.agc_gain, csi_recv_queue_data.fft_gain);
 #else
         float scaling_factor = 1.0f;
 #endif
 
         // 前 64 点
         for (int i = 0; i < 64; i++) {
-            x_iq[i].real = _IQ16(csi_recv_queue_data->buf[2 * i]);
-            x_iq[i].imag = _IQ16(csi_recv_queue_data->buf[2 * i + 1]);
+            x_iq[i].real = _IQ16(csi_recv_queue_data.buf[2 * i]);
+            x_iq[i].imag = _IQ16(csi_recv_queue_data.buf[2 * i + 1]);
         }
         fft_iq(x_iq, 1);
-        cir = complex_magnitude_iq(x_iq[0]) * scaling_factor;
-        pha = complex_phase_iq(x_iq[0]);
+
+        /*
+         * 使用整段 CIR 幅度向量的余弦距离，而不是逐点绝对差。
+         * 该指标会消除整体增益变化，专注于多径形状是否变化。
+         */
+        float current_energy = 0.0f;
+        float previous_energy = 0.0f;
+        float correlation = 0.0f;
+        for (int i = 0; i < 64; ++i) {
+            float magnitude = complex_magnitude_iq(x_iq[i]) * scaling_factor;
+            if (!isfinite(magnitude) || magnitude < 0.0f) {
+                magnitude = 0.0f;
+            }
+            if (has_previous_taps) {
+                correlation += magnitude * previous_tap_magnitude[i];
+                previous_energy += previous_tap_magnitude[i] * previous_tap_magnitude[i];
+            }
+            current_energy += magnitude * magnitude;
+            previous_tap_magnitude[i] = magnitude;
+        }
+        float raw_motion = 0.0f;
+        if (has_previous_taps && current_energy > 1e-8f && previous_energy > 1e-8f) {
+            float cosine_similarity = correlation / sqrtf(current_energy * previous_energy);
+            cosine_similarity = fminf(1.0f, fmaxf(-1.0f, cosine_similarity));
+            raw_motion = fmaxf(0.0f, 1.0f - cosine_similarity);
+        }
+        has_previous_taps = true;
+
+        /*
+         * 进入 CSI 后先用约 2 秒数据建立静态噪声基线。之后只有超过
+         * 基线三倍噪声的变化才显示为活动值，静止时曲线保持接近 0。
+         */
+        constexpr int kCalibrationFrames = 40;
+        if (calibration_frames < kCalibrationFrames) {
+            calibration_frames++;
+            float delta = raw_motion - motion_baseline;
+            motion_baseline += delta / calibration_frames;
+            motion_noise += (fabsf(delta) - motion_noise) / calibration_frames;
+            cir = 0.0f;
+            if (calibration_frames == kCalibrationFrames) {
+                ESP_LOGI(TAG, "CSI motion calibrated: baseline=%.5f noise=%.5f",
+                         motion_baseline, motion_noise);
+            }
+        } else {
+            float delta = raw_motion - motion_baseline;
+            if (delta <= motion_noise * 3.0f) {
+                motion_baseline += 0.02f * delta;
+                motion_noise += 0.02f * (fabsf(delta) - motion_noise);
+            }
+            /*
+             * 相关距离在静止环境中仍会有约百分之一的自然波动。
+             * 先使用 0.015 的最小门限抑制本底，再在 0.10 的有效
+             * 变化区间映射到 0–100，避免微小噪声持续显示为满格。
+             */
+            float motion_threshold = fmaxf(motion_noise * 5.0f, 0.015f);
+            float score = (delta - motion_threshold) / 0.10f;
+            cir = fminf(100.0f, fmaxf(0.0f, score * 100.0f));
+        }
+        pha = raw_motion;
+        if (!isfinite(cir) || cir < 0.0f) {
+            cir = 0.0f;
+        }
+        if (!isfinite(pha)) {
+            pha = 0.0f;
+        }
         // ESP_LOGI(TAG, "cir: %f, pha: %f, scaling_factor: %f", cir, pha, scaling_factor);
         // 将结果打包成 csi_data_t，交给 RadarCSI 画图（单通道）
         csi_data_t data = {
             .start = {0xAA, 0x55},
-            .id = csi_recv_queue_data->id,
-            .time_delta = (int64_t)csi_recv_queue_data->time - s_time_zero,
+            .id = csi_recv_queue_data.id,
+            .time_delta = (int64_t)csi_recv_queue_data.time - s_time_zero,
             .cir = cir,
             .pha = pha,
             .end = {0x55, 0xAA},
         };
 
         RadarCSI *radar = RadarCSI::getInstance();
-        if (radar) {
-            radar->pushData(data);
+        if (radar && radar->pushData(data)) {
+            s_csi_ui_queue_count++;
+            if (s_csi_ui_queue_count == 1) {
+                ESP_LOGI(TAG, "First CSI sample queued for UI");
+            }
         }
 
-        heap_caps_free(csi_recv_queue_data);
     }
+
+    s_csi_process_task = nullptr;
+    vTaskDelete(NULL);
 }
 
 // 参考 get-started/csi_recv_copy 的 wifi_ping_router_start，实现与路由器之间的持续 ping
@@ -275,16 +411,37 @@ esp_err_t wifi_ping_router_stop(void)
     return ESP_ERR_INVALID_STATE;
 }
 
+static void radar_wifi_csi_deinit()
+{
+    if (s_csi_capture_enabled) {
+        esp_err_t err = esp_wifi_set_csi(false);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to disable CSI: %s", esp_err_to_name(err));
+        }
+        err = esp_wifi_set_csi_rx_cb(nullptr, nullptr);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to unregister CSI callback: %s", esp_err_to_name(err));
+        }
+        s_csi_capture_enabled = false;
+    }
+
+    esp_err_t err = esp_wifi_set_promiscuous(false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to disable promiscuous mode: %s", esp_err_to_name(err));
+    }
+}
+
 static void radar_csi_start_pipeline()
 {
-    if (s_csi_pipeline_started) {
+    if (s_csi_pipeline_active) {
         return;
     }
+    s_csi_pipeline_active = true;
     // 等待主工程把 Wi‑Fi STA 连上 AP，并拿到 IP 之后再启动 CSI
-    xTaskCreate(
+    BaseType_t wait_task_ret = xTaskCreateWithCaps(
     [](void *pv) {
         // 轮询检查是否已经连上 AP 并获取到 IP
-        while (1) {
+        while (s_csi_pipeline_active) {
             esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
             if (netif) {
                 esp_netif_ip_info_t ip_info;
@@ -293,30 +450,85 @@ static void radar_csi_start_pipeline()
                     ESP_LOGI(TAG, "WiFi STA connected, got IP: " IPSTR, IP2STR(&ip_info.ip));
 
                     // 初始化 CSI（注册 csicb，开始采集）
-                    radar_wifi_csi_init();
+                    if (!radar_wifi_csi_init()) {
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        continue;
+                    }
+
+                    if (!s_csi_pipeline_active) {
+                        break;
+                    }
 
                     // 注意：不在这里自动启动 ping，而是由应用根据当前页面决定是否启动 ping
                     // 开始 ping 路由器，产生稳定的 CSI 数据流量
                     // extern esp_err_t wifi_ping_router_start(void);
                     // wifi_ping_router_start();
 
-                    s_csi_pipeline_started = true;
-
                     // 创建 CSI 处理任务，把采样数据转成 cir/pha 并喂给 UI
-                    xTaskCreate(process_csi_data_task, "process_csi_data_task", 4096, NULL, 6, NULL);
+                    BaseType_t task_ret = xTaskCreateWithCaps(
+                        process_csi_data_task,
+                        "process_csi_data_task",
+                        4096,
+                        NULL,
+                        6,
+                        &s_csi_process_task,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (task_ret != pdPASS) {
+                        ESP_LOGE(TAG, "Failed to create CSI processing task: %d", (int)task_ret);
+                    } else {
+                        s_csi_pipeline_started = true;
+                        ESP_LOGI(TAG, "CSI processing task started");
+                    }
 
-                    ESP_LOGI(TAG, "CSI pipeline started (without auto-ping)");
-                    vTaskDelete(NULL);
+                    if (s_csi_pipeline_started && s_ping_requested) {
+                        wifi_ping_router_start();
+                    }
+
+                    ESP_LOGI(TAG, "CSI pipeline started");
+                    break;
                 }
             }
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
+
+        s_csi_wait_task = nullptr;
+        vTaskDelete(NULL);
     },
     "csi_wait_wifi",
     4096,
     nullptr,
     5,
-    nullptr);
+    &s_csi_wait_task,
+    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (wait_task_ret != pdPASS) {
+        s_csi_pipeline_active = false;
+        ESP_LOGE(TAG, "Failed to create CSI Wi-Fi wait task: %d", (int)wait_task_ret);
+    } else {
+        ESP_LOGI(TAG, "CSI Wi-Fi wait task started");
+    }
+}
+
+static void radar_csi_stop_pipeline()
+{
+    s_csi_pipeline_active = false;
+    s_ping_requested = false;
+    (void)wifi_ping_router_stop();
+    radar_wifi_csi_deinit();
+
+    if (s_csi_wait_task) {
+        vTaskDelete(s_csi_wait_task);
+        s_csi_wait_task = nullptr;
+    }
+    if (s_csi_process_task) {
+        vTaskDelete(s_csi_process_task);
+        s_csi_process_task = nullptr;
+    }
+    if (s_csi_recv_queue) {
+        vQueueDeleteWithCaps(s_csi_recv_queue);
+        s_csi_recv_queue = nullptr;
+    }
+    s_csi_pipeline_started = false;
+    ESP_LOGI(TAG, "CSI pipeline stopped and resources released");
 }
 
 // ------------------------ RadarCSI 类实现 ------------------------
@@ -344,8 +556,8 @@ RadarCSI *RadarCSI::getInstance()
 RadarCSI::RadarCSI():
     csi_display_queue(nullptr),
     ser(nullptr),
-    avg_index(0),
-    avg_count(0),
+    motion_trend(0.0f),
+    motion_trend_valid(false),
     chart_initialized(false),
     chart_count(0),
     is_processing_stopped(true),  // 初始化时默认停止，等UI准备好后再恢复
@@ -355,11 +567,14 @@ RadarCSI::RadarCSI():
     chart_m_avg_index(0),
     chart_m_avg_count(0),
     chart_m_count(0),
-    chart_m_initialized(false)
+    chart_m_initialized(false),
+    behavior_occupied(false),
+    behavior_active_since_us(0),
+    behavior_inactive_since_us(0),
+    behavior_activity(0.0f)
 {
     memset(range, 0, sizeof(range));
     memset(y_range, 0, sizeof(y_range));
-    memset(avg_buffer, 0, sizeof(avg_buffer));
     memset(&last_data, 0, sizeof(last_data));
 
     memset(chart_m_range, 0, sizeof(chart_m_range));
@@ -389,7 +604,7 @@ bool RadarCSI::init()
 {
     // 创建 CSI 数据队列（RadarCSI 内部用于 UI 刷新）
     if (!csi_display_queue) {
-        csi_display_queue = xQueueCreate(20, sizeof(csi_data_t));
+        csi_display_queue = xQueueCreate(1, sizeof(csi_data_t));
         if (csi_display_queue == nullptr) {
             ESP_LOGE(TAG, "Failed to create CSI display queue");
             return false;
@@ -415,16 +630,23 @@ void RadarCSI::startPipeline()
     radar_csi_start_pipeline();
 }
 
+void RadarCSI::stopPipeline()
+{
+    radar_csi_stop_pipeline();
+}
+
 void RadarCSI::startPing()
 {
-    extern esp_err_t wifi_ping_router_start(void);
-    wifi_ping_router_start();
+    s_ping_requested = true;
+    if (s_csi_pipeline_started) {
+        wifi_ping_router_start();
+    }
 }
 
 void RadarCSI::stopPing()
 {
-    extern esp_err_t wifi_ping_router_stop(void);
-    wifi_ping_router_stop();
+    s_ping_requested = false;
+    (void)wifi_ping_router_stop();
 }
 
 void RadarCSI::initCharts()
@@ -467,45 +689,27 @@ void RadarCSI::doUpdateChart(const csi_data_t &data, bool reset_timer)
         return;
     }
 
-    // 最近 AVG_WINDOW 个点做简单滑动平均滤波，平滑振幅波形
-    avg_buffer[avg_index] = data.cir;
-    avg_index = (avg_index + 1) % AVG_WINDOW;
-    if (avg_count < AVG_WINDOW) {
-        avg_count++;
+    /*
+     * 逐帧运动强度会包含多径和接收噪声。指数趋势滤波相较固定窗口平均
+     * 对新的动作立即响应，同时不会把曲线压成复杂的高频锯齿。
+     */
+    if (!motion_trend_valid) {
+        motion_trend = data.cir;
+        motion_trend_valid = true;
+    } else {
+        motion_trend += MOTION_TREND_ALPHA * (data.cir - motion_trend);
     }
 
-    float cir_avg = 0.0f;
-    for (int i = 0; i < avg_count; ++i) {
-        cir_avg += avg_buffer[i];
-    }
-    cir_avg /= (avg_count > 0 ? avg_count : 1);
-
-    // 存储滤波后的当前数据点（单通道）
-    range[chart_count] = cir_avg * 5;
-
-    // 计算Y轴范围
-    y_range[0] = 500;
-    y_range[1] = 0;
-    for (int i = 0; i < LVGL_CHART_POINTS; i++) {
-        if (y_range[0] > range[i]) {
-            y_range[0] = range[i];
-        }
-        if (y_range[1] < range[i]) {
-            y_range[1] = range[i];
-        }
-    }
-    uint8_t y_range_size = 30;
-    // 确保Y轴范围至少为100
-    if ((y_range[1] - y_range[0]) < y_range_size) {
-        y_range[1] += (y_range_size - y_range[1] + y_range[0]) / 2;
-        y_range[0] -= (y_range_size - y_range[1] + y_range[0]) / 2;
-    }
+    // 0–100 固定活动度量表；不再因为自动缩放把本底噪声铺满整个图表。
+    range[chart_count] = motion_trend;
+    y_range[0] = 0.0f;
+    y_range[1] = 100.0f;
 
     // 周期性打印图表相关数据，便于调试
     static int s_log_count = 0;
-    if ((s_log_count++ % 200) == 0) {
+    if ((s_log_count++ % 50) == 0) {
         ESP_LOGI(TAG,
-                 "chart_idx=%u, cir=%.3f, pha=%.3f, range=%.3f, y_min=%d, y_max=%d",
+                 "chart_idx=%u, activity=%.2f, raw=%.5f, display=%.2f, y_min=%d, y_max=%d",
                  chart_count,
                  data.cir,
                  data.pha,
@@ -525,10 +729,101 @@ void RadarCSI::doUpdateChart(const csi_data_t &data, bool reset_timer)
         }
     }
 
+    updateBehavior(motion_trend);
+
     // 更新计数器
     chart_count++;
     if (chart_count >= LVGL_CHART_POINTS) {
         chart_count = 0;
+    }
+}
+
+void RadarCSI::updateBehavior(float activity)
+{
+    /*
+     * CSI 活动度反映的是环境中的动态变化，而非摄像头式的人体识别。
+     * 使用滞回和保持时间：动作需要连续 1 秒才确认“在位”，确认后要
+     * 连续静止 15 秒才切回“离位”，这样挥动、噪声和单帧异常都不会
+     * 让状态频繁闪烁。
+     */
+    const lv_color_t kActiveColor = lv_color_hex(0x6B9FF8);
+    const lv_color_t kInactiveColor = lv_color_hex(0x656565);
+    const lv_color_t kTextActiveColor = lv_color_hex(0xFFFFFF);
+    const lv_color_t kTextInactiveColor = lv_color_hex(0xB0B0B0);
+
+    if (activity < 0.0f) {
+        activity = 0.0f;
+    } else if (activity > 100.0f) {
+        activity = 100.0f;
+    }
+    behavior_activity = activity;
+
+    const int64_t now_us = esp_timer_get_time();
+    bool state_changed = false;
+    if (!behavior_occupied) {
+        behavior_inactive_since_us = 0;
+        if (activity >= BEHAVIOR_ON_THRESHOLD) {
+            if (behavior_active_since_us == 0) {
+                behavior_active_since_us = now_us;
+            } else if (now_us - behavior_active_since_us >= BEHAVIOR_ON_HOLD_US) {
+                behavior_occupied = true;
+                behavior_active_since_us = 0;
+                state_changed = true;
+            }
+        } else {
+            behavior_active_since_us = 0;
+        }
+    } else {
+        behavior_active_since_us = 0;
+        if (activity <= BEHAVIOR_OFF_THRESHOLD) {
+            if (behavior_inactive_since_us == 0) {
+                behavior_inactive_since_us = now_us;
+            } else if (now_us - behavior_inactive_since_us >= BEHAVIOR_OFF_HOLD_US) {
+                behavior_occupied = false;
+                behavior_inactive_since_us = 0;
+                state_changed = true;
+            }
+        } else {
+            behavior_inactive_since_us = 0;
+        }
+    }
+
+    if (state_changed) {
+        ESP_LOGI(TAG, "Behavior state: %s (activity=%.1f)",
+                 behavior_occupied ? "Occupied" : "Unoccupied", activity);
+    }
+
+    /*
+     * 此函数由 processData() 在 LVGL 锁内调用。行为页与曲线页共用
+     * CSI 生命周期，因此页面不可见时也更新状态；用户滑入行为页即可
+     * 看到最新结果，不需要额外任务或队列。
+     */
+    if (!ui_csi_behav_Screen) {
+        return;
+    }
+
+    if (ui_csi_3_pie_arc) {
+        lv_arc_set_value(ui_csi_3_pie_arc, (int32_t)(activity * 3.6f));
+    }
+    if (ui_csi_3_occupied_pan) {
+        lv_obj_set_style_bg_color(ui_csi_3_occupied_pan,
+                                  behavior_occupied ? kActiveColor : kInactiveColor,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_unoccupied_pan) {
+        lv_obj_set_style_bg_color(ui_csi_3_unoccupied_pan,
+                                  behavior_occupied ? kInactiveColor : kActiveColor,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_occupied_lab) {
+        lv_obj_set_style_text_color(ui_csi_3_occupied_lab,
+                                    behavior_occupied ? kTextActiveColor : kTextInactiveColor,
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    if (ui_csi_3_unoccupied_lab) {
+        lv_obj_set_style_text_color(ui_csi_3_unoccupied_lab,
+                                    behavior_occupied ? kTextInactiveColor : kTextActiveColor,
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 }
 
@@ -573,43 +868,23 @@ bool RadarCSI::pushData(const csi_data_t &data)
 {
     // 如果当前不处理数据（应用未打开或已退出），直接丢弃，不入队
     if (is_processing_stopped || csi_display_queue == nullptr) {
-        ESP_LOGW(TAG, "is_processing_stopped: %d, csi_display_queue: %p", is_processing_stopped, csi_display_queue);
         return false;
     }
 
-    if (xQueueSend(csi_display_queue, &data, 0) != pdTRUE) {
-        // 队列已满时，丢弃最旧的数据，再尝试写入最新数据，避免一直处于 full 状态
-        csi_data_t dummy;
-        (void)xQueueReceive(csi_display_queue, &dummy, 0);
-        (void)xQueueSend(csi_display_queue, &data, 0);
-        return false;
-    }
-
-    return true;
+    // UI 只需要最新采样。长度为 1 的覆盖队列避免数据积压后集中重绘。
+    return xQueueOverwrite(csi_display_queue, &data) == pdPASS;
 }
 
 void RadarCSI::processData()
 {
     if (!csi_display_queue) {
-        ESP_LOGE(TAG, "CSI display queue not initialized");
         return;
     }
 
     csi_data_t csi_display_data;
-
-    while (xQueueReceive(csi_display_queue, &csi_display_data, 0) == pdTRUE) {
-        // 如果已停止处理，只清空队列，不更新UI
-        if (is_processing_stopped) {
-            ESP_LOGW(TAG, "Processing stopped");
-            continue;
-        }
-
-        UBaseType_t queueLength = uxQueueMessagesWaiting(csi_display_queue);
-        if (queueLength > 10) {
-            ESP_LOGW(TAG, "UI queue length: %d", queueLength);
-        }
-
-        // 更新图表（包括正常数据和定时器补充的数据）
+    if (xQueueReceive(csi_display_queue, &csi_display_data, 0) == pdTRUE &&
+        !is_processing_stopped) {
+        // 每个 50ms UI tick 最多重绘一次，避免 CSI 数据突发时抢占音频和 SPI。
         esp_lv_adapter_lock(-1);
         updateChart(csi_display_data);
         esp_lv_adapter_unlock();
@@ -760,6 +1035,12 @@ void RadarCSI::processChartMData()
 void RadarCSI::stopDataProcessing()
 {
     is_processing_stopped = true;
+    motion_trend = 0.0f;
+    motion_trend_valid = false;
+    behavior_occupied = false;
+    behavior_active_since_us = 0;
+    behavior_inactive_since_us = 0;
+    behavior_activity = 0.0f;
 
     // 停止定时器
     if (update_timer) {
@@ -768,10 +1049,12 @@ void RadarCSI::stopDataProcessing()
 
     // 清空队列中的所有数据
     if (csi_display_queue) {
-        csi_data_t dummy_data;
-        while (xQueueReceive(csi_display_queue, &dummy_data, 0) == pdTRUE) {
-            // 只是清空队列
-        }
+        vQueueDelete(csi_display_queue);
+        csi_display_queue = nullptr;
+    }
+    if (chart_m_queue) {
+        vQueueDelete(chart_m_queue);
+        chart_m_queue = nullptr;
     }
 
     ESP_LOGI(TAG, "Data processing stopped");
@@ -796,9 +1079,8 @@ void RadarCSI::resetChartState()
     ser = nullptr;
 
     // 重置滤波器状态
-    avg_index = 0;
-    avg_count = 0;
-    memset(avg_buffer, 0, sizeof(avg_buffer));
+    motion_trend = 0.0f;
+    motion_trend_valid = false;
     memset(range, 0, sizeof(range));
     memset(y_range, 0, sizeof(y_range));
     memset(&last_data, 0, sizeof(last_data));

@@ -35,7 +35,9 @@ void IRAM_ATTR fft_iq(Complex_Iq *X, int inverse)
 {
     int log2N = 6;
     int N = 64;
-    Complex_Iq *temp = (Complex_Iq *)malloc(64 * sizeof(Complex_Iq));
+    // 仅在 CSI 处理任务中调用；使用栈缓冲，避免每帧 IFFT 都触发一次
+    // malloc/free，导致 PSRAM 堆碎片和处理时间抖动。
+    Complex_Iq temp[64];
 
     // Bit-reversed addressing permutation
     for (int i = 0; i < N; i++) {
@@ -85,7 +87,6 @@ void IRAM_ATTR fft_iq(Complex_Iq *X, int inverse)
         }
     }
 
-    free(temp);
 }
 
 // Bit reversal of given index 'x' with 'log2n' bits

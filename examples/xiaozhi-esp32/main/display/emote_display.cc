@@ -86,7 +86,10 @@ static emote_handle_t InitializeEmote(const esp_lcd_panel_handle_t panel, const 
         .flags = {
             .swap = true,
             .double_buffer = true,
-            .buff_dma = false,
+            // The Emote flush path submits these buffers directly to the
+            // QSPI panel.  Keep both frame buffers DMA-capable so the SPI
+            // driver does not need an internal temporary allocation.
+            .buff_dma = true,
         },
         .gfx_emote = {
             .h_res = width,
@@ -94,7 +97,12 @@ static emote_handle_t InitializeEmote(const esp_lcd_panel_handle_t panel, const 
             .fps = 30,
         },
         .buffers = {
-            .buf_pixels = static_cast<size_t>(width * 16),
+            /*
+             * These double buffers are DMA-capable internal SRAM. Keep them
+             * intentionally small so audio/CSI tasks still have a healthy
+             * internal heap reserve.
+             */
+            .buf_pixels = static_cast<size_t>(width * 8),
         },
         .task = {
             .task_priority = 5,
@@ -419,7 +427,16 @@ void EmoteDisplay::InitCustomUI(esp_lcd_panel_io_handle_t panel_io,
                                                          static_cast<uint16_t>(width),
                                                          static_cast<uint16_t>(height),
                                                          ESP_LV_ADAPTER_ROTATE_0);
-    display_config.profile.use_psram = true;
+    /*
+     * The QSPI LCD DMA path requires DMA-capable internal memory. Keeping
+     * LVGL's full-height draw buffers in PSRAM forces esp_lcd to allocate a
+     * temporary internal DMA buffer for every flush; that allocation fails
+     * once the small internal heap is fragmented, producing
+     * ESP_ERR_NO_MEM and corrupted/overlapped frames. Use two small
+     * internal draw buffers so the submitted color map is DMA-capable.
+     */
+    display_config.profile.use_psram = false;
+    display_config.profile.buffer_height = 10;
     display_config.profile.require_double_buffer = true;
 
     lv_display_t *lv_display = esp_lv_adapter_register_display(&display_config);

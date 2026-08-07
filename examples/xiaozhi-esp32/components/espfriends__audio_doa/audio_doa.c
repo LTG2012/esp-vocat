@@ -131,10 +131,8 @@ static void audio_doa_thread(void *arg)
 {
     audio_doa_t *doa = (audio_doa_t *)arg;
     while (1) {
-        uint32_t bits = xEventGroupWaitBits(doa->event_group, START_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10));
+        uint32_t bits = xEventGroupWaitBits(doa->event_group, START_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
         if (!(bits & START_BIT)) {
-            ESP_LOGI(TAG, "Audio DOA thread is not started");
-            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
         doa->state = AUDIO_DOA_STATE_RUNNING;
