@@ -53,6 +53,11 @@ typedef struct {
     int8_t buf[256];
 } csi_recv_queue_t;
 
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sta_mac[6];
+} csi_filter_ctx_t;
+
 static QueueHandle_t s_csi_recv_queue = nullptr;
 static int64_t s_time_zero = 0;
 static bool s_csi_pipeline_started = false;
@@ -67,6 +72,7 @@ static uint32_t s_csi_sample_drop_count = 0;
 static uint32_t s_csi_ui_queue_count = 0;
 static TaskHandle_t s_csi_process_task = nullptr;
 static TaskHandle_t s_csi_wait_task = nullptr;
+static csi_filter_ctx_t s_csi_filter_ctx = {};
 
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
@@ -77,22 +83,30 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
-    if ((++s_csi_callback_count % 200) == 0) {
-        ESP_LOGI(TAG, "CSI callbacks=%lu ap_match=%lu queued=%lu dropped=%lu ui_queued=%lu len=%u payload_len=%u",
+    s_csi_callback_count++;
+
+    // 只处理当前 AP 发给本机 STA 的数据，避免广播和其它客户端流量污染基线。
+    if (ctx) {
+        const auto *filter = static_cast<const csi_filter_ctx_t *>(ctx);
+        if (memcmp(info->mac, filter->bssid, sizeof(filter->bssid)) ||
+            memcmp(info->dmac, filter->sta_mac, sizeof(filter->sta_mac))) {
+            return;
+        }
+    }
+    s_csi_ap_match_count++;
+
+    if ((s_csi_ap_match_count % 200) == 0) {
+        ESP_LOGI(TAG,
+                 "CSI callbacks=%lu ap_match=%lu queued=%lu dropped=%lu ui_queued=%lu len=%u payload_len=%u rx_seq=%u",
                  (unsigned long)s_csi_callback_count,
                  (unsigned long)s_csi_ap_match_count,
                  (unsigned long)s_csi_sample_enqueue_count,
                  (unsigned long)s_csi_sample_drop_count,
                  (unsigned long)s_csi_ui_queue_count,
                  (unsigned)info->len,
-                 (unsigned)info->payload_len);
+                 (unsigned)info->payload_len,
+                 (unsigned)info->rx_seq);
     }
-
-    // 只接收来自当前连接 AP（路由器）的 CSI，ctx 里传入的是 AP 的 BSSID
-    if (ctx && memcmp(info->mac, ctx, 6)) {
-        return;
-    }
-    s_csi_ap_match_count++;
 
     static uint8_t agc_gain = 0;
     static int8_t fft_gain = 0;
@@ -141,8 +155,11 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     csi_send_queuedata.agc_gain = agc_gain;
     csi_send_queuedata.fft_gain = fft_gain;
 
-    size_t copy_len = info->len > sizeof(csi_send_queuedata.buf) - 8 ? sizeof(csi_send_queuedata.buf) - 8 : info->len;
-    memcpy(csi_send_queuedata.buf + 8, info->buf, copy_len);
+    memcpy(csi_send_queuedata.buf, info->buf, kRequiredIqBytes);
+    if (info->first_word_invalid) {
+        // ESP32-S3 可能标记首个 32-bit CSI word 无效；保持子载波位置不变并清零该 word。
+        memset(csi_send_queuedata.buf, 0, sizeof(uint32_t));
+    }
 
     if (xQueueSend(s_csi_recv_queue, &csi_send_queuedata, 0) != pdTRUE) {
         s_csi_sample_drop_count++;
@@ -202,11 +219,11 @@ static bool radar_wifi_csi_init()
         .reserved               = false
     };
 #else
-    // 其它芯片（如 ESP32）保持默认 legacy 配置
+    // ESP32-S3 路由器场景只采集格式固定的 LLTF，避免不同 LTF 布局互相比较。
     wifi_csi_config_t csi_config = {
         .lltf_en           = true,
-        .htltf_en          = true,
-        .stbc_htltf2_en    = true,
+        .htltf_en          = false,
+        .stbc_htltf2_en    = false,
         .ltf_merge_en      = true,
         .channel_filter_en = true,
         .manu_scale        = false,
@@ -220,6 +237,12 @@ static bool radar_wifi_csi_init()
         ESP_LOGW(TAG, "CSI start deferred: AP information unavailable: %s", esp_err_to_name(err));
         return false;
     }
+    memcpy(s_csi_filter_ctx.bssid, s_ap_info.bssid, sizeof(s_csi_filter_ctx.bssid));
+    err = esp_wifi_get_mac(WIFI_IF_STA, s_csi_filter_ctx.sta_mac);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get STA MAC: %s", esp_err_to_name(err));
+        return false;
+    }
 
     err = esp_wifi_set_csi_config(&csi_config);
     if (err != ESP_OK) {
@@ -227,8 +250,7 @@ static bool radar_wifi_csi_init()
         return false;
     }
     ESP_LOGI(TAG, "CSI config applied");
-    // 把 AP 的 BSSID 通过 ctx 传进回调，用来过滤 CSI
-    err = esp_wifi_set_csi_rx_cb(wifi_csi_rx_cb, s_ap_info.bssid);
+    err = esp_wifi_set_csi_rx_cb(wifi_csi_rx_cb, &s_csi_filter_ctx);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register CSI callback: %s", esp_err_to_name(err));
         return false;
@@ -248,8 +270,11 @@ static void process_csi_data_task(void *pvParameter)
 {
     csi_recv_queue_t csi_recv_queue_data;
     Complex_Iq x_iq[64];
-    float previous_tap_magnitude[64] = {};
-    bool has_previous_taps = false;
+    float tap_history[3][64] = {};
+    float previous_filtered_taps[64] = {};
+    size_t tap_history_index = 0;
+    size_t tap_history_count = 0;
+    bool has_previous_filtered_taps = false;
     float motion_baseline = 0.0f;
     float motion_noise = 0.0f;
     int calibration_frames = 0;
@@ -279,39 +304,64 @@ static void process_csi_data_task(void *pvParameter)
          * 使用整段 CIR 幅度向量的余弦距离，而不是逐点绝对差。
          * 该指标会消除整体增益变化，专注于多径形状是否变化。
          */
-        float current_energy = 0.0f;
-        float previous_energy = 0.0f;
-        float correlation = 0.0f;
         for (int i = 0; i < 64; ++i) {
             float magnitude = complex_magnitude_iq(x_iq[i]) * scaling_factor;
             if (!isfinite(magnitude) || magnitude < 0.0f) {
                 magnitude = 0.0f;
             }
-            if (has_previous_taps) {
-                correlation += magnitude * previous_tap_magnitude[i];
-                previous_energy += previous_tap_magnitude[i] * previous_tap_magnitude[i];
-            }
-            current_energy += magnitude * magnitude;
-            previous_tap_magnitude[i] = magnitude;
+            tap_history[tap_history_index][i] = magnitude;
         }
+        tap_history_index = (tap_history_index + 1) % 3;
+        if (tap_history_count < 3) {
+            tap_history_count++;
+        }
+
         float raw_motion = 0.0f;
-        if (has_previous_taps && current_energy > 1e-8f && previous_energy > 1e-8f) {
-            float cosine_similarity = correlation / sqrtf(current_energy * previous_energy);
-            cosine_similarity = fminf(1.0f, fmaxf(-1.0f, cosine_similarity));
-            raw_motion = fmaxf(0.0f, 1.0f - cosine_similarity);
+        bool raw_motion_valid = false;
+        if (tap_history_count == 3) {
+            float current_energy = 0.0f;
+            float previous_energy = 0.0f;
+            float correlation = 0.0f;
+            float filtered_taps[64];
+
+            for (int i = 0; i < 64; ++i) {
+                const float a = tap_history[0][i];
+                const float b = tap_history[1][i];
+                const float c = tap_history[2][i];
+                const float filtered = fmaxf(fminf(a, b), fminf(fmaxf(a, b), c));
+                filtered_taps[i] = filtered;
+                current_energy += filtered * filtered;
+                if (has_previous_filtered_taps) {
+                    correlation += filtered * previous_filtered_taps[i];
+                    previous_energy += previous_filtered_taps[i] * previous_filtered_taps[i];
+                }
+            }
+
+            if (has_previous_filtered_taps && current_energy > 1e-8f && previous_energy > 1e-8f) {
+                float cosine_similarity = correlation / sqrtf(current_energy * previous_energy);
+                cosine_similarity = fminf(1.0f, fmaxf(-1.0f, cosine_similarity));
+                raw_motion = fmaxf(0.0f, 1.0f - cosine_similarity);
+                raw_motion_valid = true;
+            }
+            memcpy(previous_filtered_taps, filtered_taps, sizeof(previous_filtered_taps));
+            has_previous_filtered_taps = true;
         }
-        has_previous_taps = true;
 
         /*
-         * 进入 CSI 后先用约 1 秒数据建立静态噪声基线。之后只有超过
-         * 基线噪声门限的变化才显示为活动值，静止时曲线保持接近 0。
+         * 进入 CSI 后先用约 1 秒数据建立静态噪声基线。后续使用双向限幅
+         * 更新，既跟随环境缓慢变化，又不会因只吸收负偏差而越跑越敏感。
          */
         constexpr int kCalibrationFrames = 20;
-        if (calibration_frames < kCalibrationFrames) {
+        constexpr float kNoiseFloor = 0.0035f;
+        constexpr float kBaselineAlpha = 0.02f;
+        if (!raw_motion_valid) {
+            cir = 0.0f;
+        } else if (calibration_frames < kCalibrationFrames) {
             calibration_frames++;
             float delta = raw_motion - motion_baseline;
             motion_baseline += delta / calibration_frames;
             motion_noise += (fabsf(delta) - motion_noise) / calibration_frames;
+            motion_noise = fmaxf(motion_noise, kNoiseFloor);
             cir = 0.0f;
             if (calibration_frames == kCalibrationFrames) {
                 ESP_LOGI(TAG, "CSI motion calibrated: baseline=%.5f noise=%.5f",
@@ -319,17 +369,28 @@ static void process_csi_data_task(void *pvParameter)
             }
         } else {
             float delta = raw_motion - motion_baseline;
-            if (delta <= motion_noise * 2.0f) {
-                motion_baseline += 0.03f * delta;
-                motion_noise += 0.03f * (fabsf(delta) - motion_noise);
-            }
-            /*
-             * 相关距离在静止环境中仍会有自然波动。
-             * 门限略放宽，有效变化区间收窄到 0.08，让小动作更快爬升。
-             */
-            float motion_threshold = fmaxf(motion_noise * 3.0f, 0.010f);
-            float score = (delta - motion_threshold) / 0.08f;
+            float motion_threshold = fmaxf(motion_noise * 4.0f, 0.014f);
+            float score = (delta - motion_threshold) / 0.11f;
             cir = fminf(100.0f, fmaxf(0.0f, score * 100.0f));
+
+            /*
+             * 只用静止窗口内的样本学习基线，并对正负偏差使用相同条件。
+             * 动作尖峰不会抬高基线，较大的负偏差也不会单向压低基线。
+             */
+            const float quiet_limit = fmaxf(motion_noise * 4.0f, 0.020f);
+            if (fabsf(delta) <= quiet_limit) {
+                motion_baseline += kBaselineAlpha * delta;
+                const float residual = fabsf(raw_motion - motion_baseline);
+                motion_noise += kBaselineAlpha * (residual - motion_noise);
+                motion_noise = fmaxf(motion_noise, kNoiseFloor);
+            }
+
+            static uint32_t s_motion_log_count = 0;
+            if ((++s_motion_log_count % 100) == 0) {
+                ESP_LOGI(TAG,
+                         "motion raw=%.5f baseline=%.5f noise=%.5f threshold=%.5f activity=%.2f",
+                         raw_motion, motion_baseline, motion_noise, motion_threshold, cir);
+            }
         }
         pha = raw_motion;
         if (!isfinite(cir) || cir < 0.0f) {
@@ -467,7 +528,7 @@ static void radar_csi_start_pipeline()
                     BaseType_t task_ret = xTaskCreateWithCaps(
                         process_csi_data_task,
                         "process_csi_data_task",
-                        4096,
+                        6144,
                         NULL,
                         6,
                         &s_csi_process_task,
