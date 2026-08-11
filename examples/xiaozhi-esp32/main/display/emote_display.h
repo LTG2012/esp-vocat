@@ -36,6 +36,8 @@ public:
     void SetEmotionShakeEnabled(bool enabled);
 
     void RefreshAll();
+    void PauseRendering();
+    void ResumeRendering(bool refresh = true);
     void SetupBaseIconOverlay();
 
     // Get emote handle for internal use
@@ -72,6 +74,7 @@ private:
     emote_handle_t emote_handle_ = nullptr;
     std::atomic_bool doa_test_mode_{false};
     std::atomic_bool emotion_shake_enabled_{false};
+    std::atomic_bool rendering_paused_{false};
     gfx_obj_t* image_base_obj_ = nullptr;
     gfx_image_dsc_t image_base_dsc_ = {};
 

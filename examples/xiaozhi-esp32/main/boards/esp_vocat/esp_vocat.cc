@@ -160,10 +160,10 @@ void start_lvgl(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel
 
     ESP_LOGI(TAG, "Initializing LVGL adapter, width:%d, height:%d", width, height);
     esp_lv_adapter_config_t adapter_config = ESP_LV_ADAPTER_DEFAULT_CONFIG();
-    adapter_config.task_priority = 6;
+    adapter_config.task_priority = 5;
     adapter_config.task_core_id = 0;
     adapter_config.tick_period_ms = 5;
-    adapter_config.task_min_delay_ms = 10;
+    adapter_config.task_min_delay_ms = 15;
     adapter_config.task_max_delay_ms = 100;
     adapter_config.stack_in_psram = false;
     ESP_ERROR_CHECK(esp_lv_adapter_init(&adapter_config));

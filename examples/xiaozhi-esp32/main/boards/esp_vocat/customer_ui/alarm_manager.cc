@@ -79,8 +79,10 @@ static bool main_ui_page_switch_callback(const char *target_page, void *user_dat
     /* Special handling for pomodoro page */
     if (target_page != NULL && strcmp(target_page, PAGE_POMODORO) == 0 &&
             (current_page == NULL || strcmp(current_page, PAGE_POMODORO) != 0)) {
-        alarm_start_pomodoro(5);
-        return true;  /* Handled, skip default switch */
+        /* Configure timer only; fall through so ownership switch still runs. */
+        alarm_pomodoro_reset_to_zero();
+        alarm_pomodoro_adjust_end_point(5);
+        return false;
     }
 
     return false;  /* Use default switch */

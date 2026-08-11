@@ -56,6 +56,8 @@ static emote::EmoteDisplay *s_cached_emote_display = nullptr;
 /* Forward declarations */
 static void ui_bridge_handle_gesture_navigation(ui_bridge_gesture_type_t gesture_type);
 static void ui_bridge_refresh_emote_display(void);
+static void ui_bridge_pause_emote_display(void);
+static void ui_bridge_resume_emote_display(void);
 static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gesture, lv_coord_t start_x, lv_coord_t start_y);
 
 /**
@@ -213,24 +215,46 @@ static void ui_bridge_gesture_event_cb(lv_event_t *e)
     }
 }
 
-/* Internal function to refresh emote display */
-static void ui_bridge_refresh_emote_display(void)
+/* Ensure cached emote display pointer is available */
+static emote::EmoteDisplay *ui_bridge_get_emote_display(void)
 {
     if (s_cached_emote_display == nullptr) {
         Display *base_display = Board::GetInstance().GetDisplay();
         if (!base_display) {
-            ESP_LOGI(TAG, "Refresh all: base_display is nullptr");
-            return;
+            ESP_LOGI(TAG, "Emote display: base_display is nullptr");
+            return nullptr;
         }
         s_cached_emote_display = dynamic_cast<emote::EmoteDisplay *>(base_display);
         if (!s_cached_emote_display) {
-            ESP_LOGI(TAG, "Refresh all: emote_display is nullptr");
-            return;
+            ESP_LOGI(TAG, "Emote display: dynamic_cast failed");
+            return nullptr;
         }
     }
+    return s_cached_emote_display;
+}
 
-    if (s_cached_emote_display) {
-        s_cached_emote_display->RefreshAll();
+/* Internal function to refresh emote display */
+static void ui_bridge_refresh_emote_display(void)
+{
+    emote::EmoteDisplay *emote_display = ui_bridge_get_emote_display();
+    if (emote_display) {
+        emote_display->RefreshAll();
+    }
+}
+
+static void ui_bridge_pause_emote_display(void)
+{
+    emote::EmoteDisplay *emote_display = ui_bridge_get_emote_display();
+    if (emote_display) {
+        emote_display->PauseRendering();
+    }
+}
+
+static void ui_bridge_resume_emote_display(void)
+{
+    emote::EmoteDisplay *emote_display = ui_bridge_get_emote_display();
+    if (emote_display) {
+        emote_display->ResumeRendering(true);
     }
 }
 
@@ -452,13 +476,22 @@ void ui_bridge_switch_page(const char *page_id)
     }
 
     /* Update current page state */
+    const bool enable_dummy = (strcmp(page_id, UI_BRIDGE_PAGE_HOME) == 0);
     s_current_page = page_id;
+
+    /*
+     * Home page uses Emote dummy-draw on the shared QSPI panel.
+     * LVGL must keep running on home for touch/gesture input.
+     * Only pause Emote panel blits while side pages own the display.
+     */
+    if (!enable_dummy) {
+        ui_bridge_pause_emote_display();
+    }
 
     esp_lv_adapter_lock(-1);
 
     /* Set dummy draw mode for home page */
     lv_display_t *disp = lv_display_get_default();
-    bool enable_dummy = (strcmp(page_id, UI_BRIDGE_PAGE_HOME) == 0);
     if (disp != nullptr) {
         esp_lv_adapter_set_dummy_draw(disp, enable_dummy);
     }
@@ -479,9 +512,9 @@ void ui_bridge_switch_page(const char *page_id)
 
     esp_lv_adapter_unlock();
 
-    /* Refresh emote display if switching to home page */
+    /* Returning home: re-enable emote flush path and force a full refresh. */
     if (enable_dummy) {
-        ui_bridge_refresh_emote_display();
+        ui_bridge_resume_emote_display();
     }
 }
 

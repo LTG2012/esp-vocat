@@ -55,22 +55,26 @@ class EmoteDisplay;
 // ============================================================================
 
 // Flush callback for emote
+static std::atomic_bool s_emote_rendering_paused{false};
+
 static void OnFlushCallback(int x_start, int y_start, int x_end, int y_end, const void* data, emote_handle_t manager)
 {
     (void)manager;
 
-    lv_display_t *disp = lv_display_get_default();
-    if (disp != nullptr) {
-        bool state = esp_lv_adapter_get_dummy_draw_enabled(disp);
-        if (state) {
-            esp_lv_adapter_dummy_draw_blit(
-                disp, x_start, y_start, x_end, y_end, data, true);
+    // When LVGL side pages own the panel, skip panel blits but still complete
+    // the emote flush handshake so the render task never blocks forever.
+    if (!s_emote_rendering_paused.load()) {
+        lv_display_t *disp = lv_display_get_default();
+        if (disp != nullptr) {
+            bool state = esp_lv_adapter_get_dummy_draw_enabled(disp);
+            if (state) {
+                esp_lv_adapter_dummy_draw_blit(
+                    disp, x_start, y_start, x_end, y_end, data, true);
+            }
         }
     }
-    // ESP_LOGI(TAG, "OnFlushCallback: x_start: %d, y_start: %d, x_end: %d, y_end: %d", x_start, y_start, x_end, y_end);
     emote_notify_flush_finished(manager);
 }
-
 // ============================================================================
 // Graphics Initialization Functions
 // ============================================================================
@@ -105,7 +109,7 @@ static emote_handle_t InitializeEmote(const esp_lcd_panel_handle_t panel, const 
             .buf_pixels = static_cast<size_t>(width * 8),
         },
         .task = {
-            .task_priority = 5,
+            .task_priority = 7,
             .task_stack = 6 * 1024,
             .task_affinity = 0,
             .task_stack_in_ext = true,
@@ -130,6 +134,8 @@ EmoteDisplay::EmoteDisplay(const esp_lcd_panel_handle_t panel, const esp_lcd_pan
     const int width, const int height)
 {
     emote_handle_ = InitializeEmote(panel, width, height);
+    rendering_paused_.store(false);
+    s_emote_rendering_paused.store(false);
 }
 
 EmoteDisplay::~EmoteDisplay()
@@ -346,9 +352,45 @@ void EmoteDisplay::SetEmotionShakeEnabled(bool enabled)
 
 void EmoteDisplay::RefreshAll()
 {
-    if (emote_handle_) {
-        emote_notify_all_refresh(emote_handle_);
+    if (!emote_handle_ || rendering_paused_.load()) {
         return;
+    }
+
+    if (emote_lock(emote_handle_) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to lock emote display for refresh");
+        return;
+    }
+
+    emote_notify_all_refresh(emote_handle_);
+    emote_unlock(emote_handle_);
+}
+
+void EmoteDisplay::PauseRendering()
+{
+    if (rendering_paused_.exchange(true)) {
+        return;
+    }
+
+    s_emote_rendering_paused.store(true);
+    ESP_LOGI(TAG, "Emote rendering paused for LVGL page");
+}
+
+void EmoteDisplay::ResumeRendering(bool refresh)
+{
+    const bool was_paused = rendering_paused_.exchange(false);
+    s_emote_rendering_paused.store(false);
+    if (!was_paused) {
+        if (refresh) {
+            RefreshAll();
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Emote rendering resumed for home page");
+    // Let any in-flight LVGL/panel transfer settle before emote reclaims SPI.
+    vTaskDelay(pdMS_TO_TICKS(40));
+    if (refresh) {
+        RefreshAll();
     }
 }
 
@@ -413,11 +455,11 @@ void EmoteDisplay::InitCustomUI(esp_lcd_panel_io_handle_t panel_io,
 
     ESP_LOGI(TAG, "Initializing LVGL adapter, width:%d, height:%d", width, height);
     esp_lv_adapter_config_t adapter_config = ESP_LV_ADAPTER_DEFAULT_CONFIG();
-    adapter_config.task_priority = 6;
+    adapter_config.task_priority = 5;
     adapter_config.task_core_id = 0;
     adapter_config.tick_period_ms = 5;
-    adapter_config.task_min_delay_ms = 10;
-    adapter_config.task_max_delay_ms = 100;
+    adapter_config.task_min_delay_ms = 15;
+    adapter_config.task_max_delay_ms = 50;
     adapter_config.stack_in_psram = false;
     ESP_ERROR_CHECK(esp_lv_adapter_init(&adapter_config));
 
