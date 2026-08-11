@@ -194,8 +194,8 @@ private:
     // 使用 float 存放 Y 轴范围，避免负值写入 uint16_t 产生 655xx 这样的溢出
     float y_range[2];
 
-    // 指数趋势滤波：0.30 在 20Hz 下约 120ms 群延迟。
-    static constexpr float MOTION_TREND_ALPHA = 0.30f;
+    // 指数趋势滤波：0.55 在 20Hz 下约 50ms 群延迟，响应更跟手。
+    static constexpr float MOTION_TREND_ALPHA = 0.55f;
     float motion_trend;
     bool motion_trend_valid;
 
@@ -224,10 +224,10 @@ private:
     bool chart_m_initialized;
 
     // ========== CSI 行为检测状态机 ==========
-    static constexpr float BEHAVIOR_ON_THRESHOLD = 22.0f;
+    static constexpr float BEHAVIOR_ON_THRESHOLD = 16.0f;
     static constexpr float BEHAVIOR_OFF_THRESHOLD = 8.0f;
-    static constexpr int64_t BEHAVIOR_ON_HOLD_US = 1000000;   // 连续活动 1 秒
-    static constexpr int64_t BEHAVIOR_OFF_HOLD_US = 15000000; // 静止 15 秒
+    static constexpr int64_t BEHAVIOR_ON_HOLD_US = 400000;   // 连续活动 0.4 秒
+    static constexpr int64_t BEHAVIOR_OFF_HOLD_US = 4000000; // 静止 4 秒
     bool behavior_occupied;
     int64_t behavior_active_since_us;
     int64_t behavior_inactive_since_us;

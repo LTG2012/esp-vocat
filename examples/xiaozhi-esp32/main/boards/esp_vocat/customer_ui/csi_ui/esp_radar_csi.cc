@@ -303,10 +303,10 @@ static void process_csi_data_task(void *pvParameter)
         has_previous_taps = true;
 
         /*
-         * 进入 CSI 后先用约 2 秒数据建立静态噪声基线。之后只有超过
-         * 基线三倍噪声的变化才显示为活动值，静止时曲线保持接近 0。
+         * 进入 CSI 后先用约 1 秒数据建立静态噪声基线。之后只有超过
+         * 基线噪声门限的变化才显示为活动值，静止时曲线保持接近 0。
          */
-        constexpr int kCalibrationFrames = 40;
+        constexpr int kCalibrationFrames = 20;
         if (calibration_frames < kCalibrationFrames) {
             calibration_frames++;
             float delta = raw_motion - motion_baseline;
@@ -319,17 +319,16 @@ static void process_csi_data_task(void *pvParameter)
             }
         } else {
             float delta = raw_motion - motion_baseline;
-            if (delta <= motion_noise * 3.0f) {
-                motion_baseline += 0.02f * delta;
-                motion_noise += 0.02f * (fabsf(delta) - motion_noise);
+            if (delta <= motion_noise * 2.0f) {
+                motion_baseline += 0.03f * delta;
+                motion_noise += 0.03f * (fabsf(delta) - motion_noise);
             }
             /*
-             * 相关距离在静止环境中仍会有约百分之一的自然波动。
-             * 先使用 0.015 的最小门限抑制本底，再在 0.10 的有效
-             * 变化区间映射到 0–100，避免微小噪声持续显示为满格。
+             * 相关距离在静止环境中仍会有自然波动。
+             * 门限略放宽，有效变化区间收窄到 0.08，让小动作更快爬升。
              */
-            float motion_threshold = fmaxf(motion_noise * 5.0f, 0.015f);
-            float score = (delta - motion_threshold) / 0.10f;
+            float motion_threshold = fmaxf(motion_noise * 3.0f, 0.010f);
+            float score = (delta - motion_threshold) / 0.08f;
             cir = fminf(100.0f, fmaxf(0.0f, score * 100.0f));
         }
         pha = raw_motion;

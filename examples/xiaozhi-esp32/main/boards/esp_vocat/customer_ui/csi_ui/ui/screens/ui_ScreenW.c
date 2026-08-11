@@ -11,7 +11,7 @@
 #include <esp_log.h>
 
 #define TAG "ui_ScreenW"
-#define TIMER_UPDATE_PERIOD_MS  50
+#define TIMER_UPDATE_PERIOD_MS  33
 
 typedef struct {
     lv_timer_t *timer;
