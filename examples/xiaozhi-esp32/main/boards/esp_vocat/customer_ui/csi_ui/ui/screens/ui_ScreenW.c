@@ -52,6 +52,7 @@ lv_obj_t *ui_ScreenW_screen_init(lv_obj_t *parent)
 
 
     ui_ScreenW_Chart = lv_chart_create(ui_ScreenW);
+    lv_obj_remove_flag(ui_ScreenW_Chart, LV_OBJ_FLAG_CLICKABLE);  /* Prefer page swipe over chart hit-test */
     lv_obj_set_width(ui_ScreenW_Chart, 280);
     lv_obj_set_height(ui_ScreenW_Chart, 160);
     lv_obj_set_x(ui_ScreenW_Chart, 10);

@@ -58,6 +58,13 @@ static void ui_bridge_handle_gesture_navigation(ui_bridge_gesture_type_t gesture
 static void ui_bridge_refresh_emote_display(void);
 static void ui_bridge_pause_emote_display(void);
 static void ui_bridge_resume_emote_display(void);
+static bool ui_bridge_is_csi_page(const char *page_id)
+{
+    return page_id != NULL &&
+           (strcmp(page_id, "SCREEN_W") == 0 ||
+            strcmp(page_id, "CSI_BEHAV") == 0);
+}
+
 static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gesture, lv_coord_t start_x, lv_coord_t start_y);
 
 /**
@@ -71,34 +78,35 @@ static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gest
  */
 static bool ui_bridge_check_gesture_start_position(ui_bridge_gesture_type_t gesture, lv_coord_t start_x, lv_coord_t start_y)
 {
+    /* CSI pages are full-screen swipeable: no edge start-zone restriction. */
+    if (ui_bridge_is_csi_page(s_current_page)) {
+        return true;
+    }
+
     bool result = false;
     switch (gesture) {
     case UI_BRIDGE_GESTURE_SWIPE_UP:
-        /* Must start from bottom edge and center X */
         result = (start_y > (DISPLAY_HEIGHT - UI_BRIDGE_EDGE_THRESHOLD)) &&
                (LV_ABS(start_x - UI_BRIDGE_CENTER_X) <= UI_BRIDGE_CENTER_RANGE);
         break;
 
     case UI_BRIDGE_GESTURE_SWIPE_DOWN:
-        /* Must start from top edge and center X */
         result = (start_y < UI_BRIDGE_EDGE_THRESHOLD) &&
                (LV_ABS(start_x - UI_BRIDGE_CENTER_X) <= UI_BRIDGE_CENTER_RANGE);
         break;
 
     case UI_BRIDGE_GESTURE_SWIPE_LEFT:
-        /* Must start from right edge and center Y */
         result = (start_x > (DISPLAY_WIDTH - UI_BRIDGE_EDGE_THRESHOLD)) &&
                (LV_ABS(start_y - UI_BRIDGE_CENTER_Y) <= UI_BRIDGE_CENTER_RANGE);
         break;
 
     case UI_BRIDGE_GESTURE_SWIPE_RIGHT:
-        /* Must start from left edge and center Y */
         result = (start_x < UI_BRIDGE_EDGE_THRESHOLD) &&
                (LV_ABS(start_y - UI_BRIDGE_CENTER_Y) <= UI_BRIDGE_CENTER_RANGE);
         break;
 
     default:
-        result = true;  /* No position requirement for other gestures */
+        result = true;
         break;
     }
     return result;
@@ -153,54 +161,46 @@ static void ui_bridge_gesture_event_cb(lv_event_t *e)
 
         /* Check for swipe gesture on release (if not already handled) */
         if (!state->handled) {
-            /* Only recognize as swipe if one axis exceeds threshold while the other doesn't */
-            /* If both exceed threshold, it's likely dragging (e.g., arc), not a swipe */
-            bool dx_exceeds = LV_ABS(dx) >= UI_BRIDGE_GESTURE_SWIPE_THRESHOLD;
-            bool dy_exceeds = LV_ABS(dy) >= UI_BRIDGE_GESTURE_SWIPE_THRESHOLD;
+            /* Recognize directional swipes. CSI pages use looser thresholds
+             * because dense widgets and real-time redraw make pure edge swipes hard. */
+            const bool csi_page = ui_bridge_is_csi_page(s_current_page);
+            const lv_coord_t abs_dx = LV_ABS(dx);
+            const lv_coord_t abs_dy = LV_ABS(dy);
+            const lv_coord_t swipe_threshold = csi_page ? 18 : UI_BRIDGE_GESTURE_SWIPE_THRESHOLD;
+            const bool dx_exceeds = abs_dx >= swipe_threshold;
+            const bool dy_exceeds = abs_dy >= swipe_threshold;
+            const bool pure_axis = (dx_exceeds && !dy_exceeds) || (!dx_exceeds && dy_exceeds);
+            const bool dominant_axis = csi_page && (dx_exceeds || dy_exceeds) &&
+                                       (abs_dx != abs_dy) && ((abs_dx * 4 >= abs_dy * 3) || (abs_dy * 4 >= abs_dx * 3));
 
-            if ((dx_exceeds && !dy_exceeds) || (!dx_exceeds && dy_exceeds)) {
+            if (pure_axis || dominant_axis) {
                 ui_bridge_gesture_type_t gesture = UI_BRIDGE_GESTURE_NONE;
 
-                /* Determine swipe direction based on dominant axis */
-                if (LV_ABS(dx) > LV_ABS(dy)) {
-                    /* Horizontal swipe */
-                    if (dx < 0) {
-                        gesture = UI_BRIDGE_GESTURE_SWIPE_LEFT;
-                    } else {
-                        gesture = UI_BRIDGE_GESTURE_SWIPE_RIGHT;
-                    }
+                if (abs_dx > abs_dy) {
+                    gesture = (dx < 0) ? UI_BRIDGE_GESTURE_SWIPE_LEFT : UI_BRIDGE_GESTURE_SWIPE_RIGHT;
                 } else {
-                    /* Vertical swipe */
-                    if (dy < 0) {
-                        gesture = UI_BRIDGE_GESTURE_SWIPE_UP;
-                    } else {
-                        gesture = UI_BRIDGE_GESTURE_SWIPE_DOWN;
-                    }
+                    gesture = (dy < 0) ? UI_BRIDGE_GESTURE_SWIPE_UP : UI_BRIDGE_GESTURE_SWIPE_DOWN;
                 }
 
                 if (gesture != UI_BRIDGE_GESTURE_NONE) {
                     if (ui_bridge_check_gesture_start_position(gesture, state->start_x, state->start_y)) {
-                        ESP_LOGD(TAG, "swipe detected: %d (start: %ld, %ld)", gesture,
-                                 (long)state->start_x, (long)state->start_y);
+                        ESP_LOGD(TAG, "swipe accepted: %d start=(%ld,%ld) delta=(%ld,%ld)",
+                                 gesture, (long)state->start_x, (long)state->start_y, (long)dx, (long)dy);
                         ui_bridge_handle_gesture_navigation(gesture);
                         state->handled = true;
                     } else {
-                        ESP_LOGE(TAG, "swipe gesture %d rejected: invalid start position (%ld, %ld)",
-                                 gesture, (long)state->start_x, (long)state->start_y);
+                        ESP_LOGW(TAG, "swipe rejected by start zone: %d start=(%ld,%ld) delta=(%ld,%ld) page=%s",
+                                 gesture, (long)state->start_x, (long)state->start_y, (long)dx, (long)dy,
+                                 s_current_page ? s_current_page : "NULL");
                     }
                 }
             } else if (dx_exceeds && dy_exceeds) {
-                ESP_LOGW(TAG, "Both axes exceed threshold (dx=%ld, dy=%ld) - treating as drag, not swipe",
-                         (long)dx, (long)dy);
+                ESP_LOGW(TAG, "swipe rejected as diagonal drag: dx=%ld dy=%ld page=%s",
+                         (long)dx, (long)dy, s_current_page ? s_current_page : "NULL");
             } else {
-                /* It's a press (not a swipe) */
-                ui_bridge_gesture_type_t gesture;
-                if (press_duration >= UI_BRIDGE_GESTURE_LONG_PRESS_TIME_MS) {
-                    gesture = UI_BRIDGE_GESTURE_LONG_PRESS;
-                } else {
-                    gesture = UI_BRIDGE_GESTURE_SHORT_PRESS;
-                }
-                ESP_LOGD(TAG, "press detected: %d (duration: %lu ms, dx: %ld, dy: %ld)", gesture, press_duration, LV_ABS(dx), LV_ABS(dy));
+                ESP_LOGD(TAG, "touch treated as press: dx=%ld dy=%ld dur=%lums page=%s",
+                         (long)dx, (long)dy, (unsigned long)press_duration,
+                         s_current_page ? s_current_page : "NULL");
             }
         }
 
