@@ -11,6 +11,7 @@
 #include "base_control.h"
 #include "audio_analysis.h"
 #include "touch_sensor.h"
+#include "bmi270_imu.h"
 #include <functional>
 
 class EspS3Cat : public WifiBoard {
@@ -34,6 +35,7 @@ public:
     {
         return base_control_;
     }
+    Bmi270Imu* GetImu() const { return imu_; }
 
 private:
     i2c_master_bus_handle_t i2c_bus_;
@@ -46,6 +48,7 @@ private:
     BaseControl* base_control_;
     AudioAnalysis* audio_analysis_;
     TouchSensor* touch_sensor_;
+    Bmi270Imu* imu_ = nullptr;
 
     void InitializeI2c();
     void InitializeSpi();

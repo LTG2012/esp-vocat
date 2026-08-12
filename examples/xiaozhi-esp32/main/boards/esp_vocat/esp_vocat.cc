@@ -334,6 +334,11 @@ EspS3Cat::EspS3Cat() : boot_button_(BOOT_BUTTON_GPIO)
     InitializeCst816sTouchPad();
     InitializeTouchSensor();
 
+    imu_ = new Bmi270Imu(i2c_bus_);
+    if (!imu_->Start()) {
+        ESP_LOGW(TAG, "Failed to start BMI270 task");
+    }
+
     // Initialize modules
     base_control_ = new BaseControl(this);
     base_control_->Initialize();

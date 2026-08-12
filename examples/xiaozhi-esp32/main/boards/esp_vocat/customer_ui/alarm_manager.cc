@@ -6,6 +6,7 @@
 #include "magnetic_monitor.h"
 #include "csi_ui/ui/ui.h"
 #include "csi_ui/esp_radar_csi.h"
+#include "attitude_monitor.h"
 
 #define TAG "alarm_manager"
 
@@ -30,6 +31,7 @@ static lv_obj_t *container_muyu = NULL;
 static lv_obj_t *container_screenW = NULL;
 static lv_obj_t *container_csi_behav = NULL;
 static lv_obj_t *container_magnetic_monitor = NULL;
+static lv_obj_t *container_attitude_monitor = NULL;
 
 static bool is_csi_page(const char *page_name)
 {
@@ -110,6 +112,9 @@ void alarm_create_ui()
     /* Create and register the slider magnetic monitor page */
     container_magnetic_monitor = magnetic_monitor_create_with_parent(scr);
     ui_bridge_register_page_with_cycle("MAGNETIC_MONITOR", &container_magnetic_monitor, true);
+
+    container_attitude_monitor = attitude_monitor_create_with_parent(scr);
+    ui_bridge_register_page_with_cycle(UI_BRIDGE_PAGE_ATTITUDE_MONITOR, &container_attitude_monitor, true);
 
     /* Create and register CSI pages in the left/right swipe cycle */
     container_screenW = ui_ScreenW_screen_init(scr);
