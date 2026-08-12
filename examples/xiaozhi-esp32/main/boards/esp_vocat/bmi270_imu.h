@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 #include <driver/i2c_master.h>
 #include <freertos/FreeRTOS.h>
@@ -27,6 +28,7 @@ public:
     bool Start();
     AttitudeSnapshot GetSnapshot() const;
     void SetHighRate(bool high_rate);
+    void SetShakeCallback(std::function<void()> callback);
 
 private:
     static void TaskEntry(void *arg);
@@ -43,4 +45,5 @@ private:
     volatile bool high_rate_ = false;
     volatile bool stop_ = false;
     uint8_t address_ = 0;
+    std::function<void()> shake_callback_;
 };

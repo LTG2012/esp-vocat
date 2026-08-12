@@ -12,6 +12,7 @@
 #include "audio_analysis.h"
 #include "touch_sensor.h"
 #include "bmi270_imu.h"
+#include <esp_timer.h>
 #include <functional>
 
 class EspS3Cat : public WifiBoard {
@@ -49,6 +50,7 @@ private:
     AudioAnalysis* audio_analysis_;
     TouchSensor* touch_sensor_;
     Bmi270Imu* imu_ = nullptr;
+    esp_timer_handle_t shake_emotion_timer_ = nullptr;
 
     void InitializeI2c();
     void InitializeSpi();
@@ -58,6 +60,7 @@ private:
     void InitializeCst816sTouchPad();
     void InitializeTouchSensor();
     void InitializePower();
+    static void ShakeEmotionTimerCallback(void* arg);
     // void create_control_ui();
 };
 

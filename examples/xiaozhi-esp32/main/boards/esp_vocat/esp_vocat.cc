@@ -322,6 +322,22 @@ void EspS3Cat::InitializeTouchSensor()
     }
 }
 
+void EspS3Cat::ShakeEmotionTimerCallback(void* arg)
+{
+    Application::GetInstance().Schedule([]() {
+        auto &app = Application::GetInstance();
+        const char *page = ui_bridge_get_current_page();
+        if (app.GetDeviceState() != kDeviceStateIdle || page == nullptr ||
+            strcmp(page, UI_BRIDGE_PAGE_HOME) != 0) {
+            return;
+        }
+        auto *display = dynamic_cast<emote::EmoteDisplay *>(Board::GetInstance().GetDisplay());
+        if (display) {
+            display->SetEmotion("neutral");
+        }
+    });
+}
+
 EspS3Cat::EspS3Cat() : boot_button_(BOOT_BUTTON_GPIO)
 {
     ESP_LOGI(TAG, "EchoEar PCB Version: %d", SELECT_BOARD);
@@ -334,7 +350,36 @@ EspS3Cat::EspS3Cat() : boot_button_(BOOT_BUTTON_GPIO)
     InitializeCst816sTouchPad();
     InitializeTouchSensor();
 
+    const esp_timer_create_args_t shake_timer_args = {
+        .callback = &EspS3Cat::ShakeEmotionTimerCallback,
+        .arg = this,
+        .name = "shake_emotion",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&shake_timer_args, &shake_emotion_timer_));
+
     imu_ = new Bmi270Imu(i2c_bus_);
+    imu_->SetShakeCallback([this]() {
+        auto &app = Application::GetInstance();
+        const char *page = ui_bridge_get_current_page();
+        if (app.GetDeviceState() != kDeviceStateIdle || page == nullptr ||
+            strcmp(page, UI_BRIDGE_PAGE_HOME) != 0) {
+            return;
+        }
+        app.Schedule([this]() {
+            auto &app = Application::GetInstance();
+            const char *page = ui_bridge_get_current_page();
+            if (app.GetDeviceState() != kDeviceStateIdle || page == nullptr ||
+                strcmp(page, UI_BRIDGE_PAGE_HOME) != 0) {
+                return;
+            }
+            auto *display = dynamic_cast<emote::EmoteDisplay *>(Board::GetInstance().GetDisplay());
+            if (display) {
+                display->SetEmotion("confused");
+                esp_timer_stop(shake_emotion_timer_);
+                esp_timer_start_once(shake_emotion_timer_, 1800 * 1000ULL);
+            }
+        });
+    });
     if (!imu_->Start()) {
         ESP_LOGW(TAG, "Failed to start BMI270 task");
     }

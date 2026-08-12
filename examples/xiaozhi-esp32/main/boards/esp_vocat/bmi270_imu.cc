@@ -1,7 +1,9 @@
 #include "bmi270_imu.h"
 
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
+#include <utility>
 
 #include <esp_log.h>
 #include <esp_rom_sys.h>
@@ -158,9 +160,40 @@ void Bmi270Imu::Run()
     }
 
     int failures = 0;
+    float previous_accel[3] = {};
+    bool have_previous = false;
+    int shake_hits = 0;
+    int64_t shake_window_start_us = 0;
+    int64_t last_shake_hit_us = 0;
+    int64_t shake_cooldown_until_us = 0;
     while (!stop_) {
         float accel[3];
         if (ReadSample(accel)) {
+            const int64_t now_us = esp_timer_get_time();
+            if (have_previous && now_us >= shake_cooldown_until_us) {
+                const float dx = accel[0] - previous_accel[0];
+                const float dy = accel[1] - previous_accel[1];
+                const float dz = accel[2] - previous_accel[2];
+                const float impulse = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (impulse >= 0.45f && now_us - last_shake_hit_us >= 80000) {
+                    if (shake_window_start_us == 0 || now_us - shake_window_start_us > 800000) {
+                        shake_window_start_us = now_us;
+                        shake_hits = 0;
+                    }
+                    last_shake_hit_us = now_us;
+                    if (++shake_hits >= 3) {
+                        shake_hits = 0;
+                        shake_window_start_us = 0;
+                        shake_cooldown_until_us = now_us + 4000000;
+                        if (shake_callback_) {
+                            shake_callback_();
+                        }
+                    }
+                }
+            }
+            std::memcpy(previous_accel, accel, sizeof(previous_accel));
+            have_previous = true;
+
             AttitudeSnapshot next;
             next.state = ImuState::kRunning;
             std::memcpy(next.accel_g, accel, sizeof(accel));
@@ -197,4 +230,9 @@ AttitudeSnapshot Bmi270Imu::GetSnapshot() const
 void Bmi270Imu::SetHighRate(bool high_rate)
 {
     high_rate_ = high_rate;
+}
+
+void Bmi270Imu::SetShakeCallback(std::function<void()> callback)
+{
+    shake_callback_ = std::move(callback);
 }
